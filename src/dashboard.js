@@ -29,6 +29,12 @@ let isSuggestionsOpen = false;
 let isConfirmOpen = false;
 let confirmCallback = null;
 
+// Preview modal state
+let modalStack = []; // Array of { type: 'video'|'channel', data: {...} }
+let player = null; // YouTube IFrame player instance
+let channelVideoFocusIndex = 0;
+let currentChannelVideos = [];
+
 // Inline unsubscribe confirmation state
 let pendingUnsubscribe = null; // { channelId, index, timeoutId }
 
@@ -690,6 +696,260 @@ function recalculateChannelActivity() {
   if (currentTab === 'channels') {
     renderChannels();
   }
+}
+
+// Modal Stack Management
+function pushModal(type, data) {
+  modalStack.push({ type, data });
+  renderTopModal();
+}
+
+function popModal() {
+  if (modalStack.length === 0) return false;
+
+  const popped = modalStack.pop();
+
+  // Cleanup popped modal
+  if (popped.type === 'video') {
+    destroyPlayer();
+    document.getElementById('video-preview-modal').classList.remove('visible');
+  } else if (popped.type === 'channel') {
+    document.getElementById('channel-preview-modal').classList.remove('visible');
+  }
+
+  // Show next modal in stack or return to dashboard
+  if (modalStack.length > 0) {
+    renderTopModal();
+  }
+
+  return true;
+}
+
+function renderTopModal() {
+  if (modalStack.length === 0) return;
+
+  const top = modalStack[modalStack.length - 1];
+
+  // Hide all preview modals first
+  document.getElementById('video-preview-modal').classList.remove('visible');
+  document.getElementById('channel-preview-modal').classList.remove('visible');
+
+  if (top.type === 'video') {
+    showVideoPreview(top.data);
+  } else if (top.type === 'channel') {
+    showChannelPreview(top.data);
+  }
+}
+
+function isPreviewOpen() {
+  return modalStack.length > 0;
+}
+
+// YouTube IFrame API
+function loadYouTubeAPI() {
+  if (window.YT) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    const tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    const firstScriptTag = document.getElementsByTagName('script')[0];
+    firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+    window.onYouTubeIframeAPIReady = () => {
+      resolve();
+    };
+  });
+}
+
+// Video Preview
+async function showVideoPreview(video) {
+  const modal = document.getElementById('video-preview-modal');
+  const titleEl = document.getElementById('preview-video-title');
+  const channelEl = document.getElementById('preview-video-channel');
+
+  titleEl.textContent = video.title;
+  channelEl.textContent = video.channel;
+
+  modal.classList.add('visible');
+
+  // Wait for YouTube API if needed
+  await loadYouTubeAPI();
+
+  // Destroy existing player if any
+  destroyPlayer();
+
+  // Create new player
+  player = new YT.Player('preview-player', {
+    height: '100%',
+    width: '100%',
+    videoId: video.id,
+    playerVars: {
+      autoplay: 1,
+      modestbranding: 1,
+      rel: 0,
+      enablejsapi: 1,
+    },
+    events: {
+      onReady: (event) => {
+        event.target.playVideo();
+      },
+    },
+  });
+}
+
+function destroyPlayer() {
+  if (player && player.destroy) {
+    try {
+      player.destroy();
+    } catch (e) {
+      console.warn('Player destroy error:', e);
+    }
+  }
+  player = null;
+
+  // Reset the player container
+  const container = document.querySelector('.preview-player-container');
+  if (container) {
+    container.textContent = '';
+    const playerDiv = document.createElement('div');
+    playerDiv.id = 'preview-player';
+    container.appendChild(playerDiv);
+  }
+}
+
+// Video player controls
+function seekVideo(seconds) {
+  if (!player || !player.getCurrentTime) return;
+  const current = player.getCurrentTime();
+  player.seekTo(current + seconds, true);
+}
+
+function togglePlayPause() {
+  if (!player || !player.getPlayerState) return;
+  const state = player.getPlayerState();
+  if (state === YT.PlayerState.PLAYING) {
+    player.pauseVideo();
+  } else {
+    player.playVideo();
+  }
+}
+
+function toggleMute() {
+  if (!player || !player.isMuted) return;
+  if (player.isMuted()) {
+    player.unMute();
+  } else {
+    player.mute();
+  }
+}
+
+function seekToPercent(percent) {
+  if (!player || !player.getDuration) return;
+  const duration = player.getDuration();
+  player.seekTo(duration * percent, true);
+}
+
+// Channel Preview
+function showChannelPreview(channel) {
+  const modal = document.getElementById('channel-preview-modal');
+  const bannerEl = document.getElementById('channel-preview-banner');
+  const avatarEl = document.getElementById('channel-preview-avatar');
+  const nameEl = document.getElementById('channel-preview-name');
+  const statsEl = document.getElementById('channel-preview-stats');
+  const videosEl = document.getElementById('channel-preview-videos');
+
+  // Set channel info (using textContent for security)
+  nameEl.textContent = channel.name;
+  statsEl.textContent = channel.subscriberCount || '';
+  avatarEl.src = fixUrl(channel.thumbnail) || '';
+
+  // Banner - use a gradient if no banner available
+  bannerEl.style.backgroundImage = '';
+
+  // Get videos for this channel from subscriptionVideos
+  currentChannelVideos = subscriptionVideos
+    .filter(v => v.channelId === channel.id)
+    .sort((a, b) => {
+      // Sort by publishedAt timestamp (most recent first)
+      const aTime = parseRelativeTime(a.publishedAt) || 0;
+      const bTime = parseRelativeTime(b.publishedAt) || 0;
+      return bTime - aTime;
+    });
+
+  channelVideoFocusIndex = 0;
+
+  if (currentChannelVideos.length === 0) {
+    videosEl.textContent = '';
+    const noVideosDiv = document.createElement('div');
+    noVideosDiv.className = 'channel-no-videos';
+    noVideosDiv.textContent = 'No recent videos loaded';
+    videosEl.appendChild(noVideosDiv);
+  } else {
+    renderChannelVideos();
+  }
+
+  modal.classList.add('visible');
+}
+
+function renderChannelVideos() {
+  const videosEl = document.getElementById('channel-preview-videos');
+  videosEl.textContent = '';
+
+  currentChannelVideos.forEach((video, index) => {
+    const item = document.createElement('div');
+    item.className = 'channel-video-item' + (index === channelVideoFocusIndex ? ' focused' : '');
+    item.dataset.index = index;
+    item.dataset.videoId = video.id;
+
+    const thumb = document.createElement('img');
+    thumb.className = 'channel-video-thumb';
+    thumb.src = fixUrl(video.thumbnail);
+    thumb.alt = '';
+    thumb.loading = 'lazy';
+    item.appendChild(thumb);
+
+    const title = document.createElement('div');
+    title.className = 'channel-video-title';
+    title.title = video.title;
+    title.textContent = video.title;
+    item.appendChild(title);
+
+    const duration = document.createElement('div');
+    duration.className = 'channel-video-duration';
+    duration.textContent = (video.duration || '') + (video.publishedAt ? ' · ' + video.publishedAt : '');
+    item.appendChild(duration);
+
+    item.addEventListener('click', () => {
+      channelVideoFocusIndex = index;
+      renderChannelVideos();
+      previewChannelVideo();
+    });
+
+    videosEl.appendChild(item);
+  });
+
+  // Scroll focused video into view
+  const focused = videosEl.querySelector('.focused');
+  if (focused) {
+    focused.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  }
+}
+
+function previewChannelVideo() {
+  const video = currentChannelVideos[channelVideoFocusIndex];
+  if (!video) return;
+
+  pushModal('video', video);
+}
+
+function scrollChannelVideos(direction) {
+  const maxIndex = currentChannelVideos.length - 1;
+  if (direction === 'left') {
+    channelVideoFocusIndex = Math.max(0, channelVideoFocusIndex - 1);
+  } else {
+    channelVideoFocusIndex = Math.min(maxIndex, channelVideoFocusIndex + 1);
+  }
+  renderChannelVideos();
 }
 
 // Get activity class for channel based on last upload timestamp
