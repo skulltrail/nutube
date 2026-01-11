@@ -128,7 +128,7 @@ function renderShortcuts() {
   ];
 
   const watchLaterShortcuts = [
-    { keys: ['Space'], desc: 'Select' },
+    { keys: ['Space'], desc: 'Preview video' },
     { keys: ['v'], desc: 'Visual mode (range)' },
     { keys: ['x', 'd', 'Del'], desc: 'Delete' },
     { keys: ['t'], desc: 'Move to top' },
@@ -139,7 +139,7 @@ function renderShortcuts() {
   ];
 
   const subscriptionsShortcuts = [
-    { keys: ['Space'], desc: 'Toggle Watch Later' },
+    { keys: ['Space'], desc: 'Preview video' },
     { keys: ['v'], desc: 'Visual mode (range)' },
     { keys: ['w'], desc: 'Add to Watch Later' },
   ];
@@ -147,7 +147,7 @@ function renderShortcuts() {
   const channelsShortcuts = [
     { keys: ['x', 'd'], desc: 'Unsubscribe' },
     { keys: ['z'], desc: 'Undo unsubscribe' },
-    { keys: ['Space'], desc: 'Similar channels' },
+    { keys: ['Space'], desc: 'Preview channel' },
   ];
 
   let shortcuts = [...commonShortcuts];
@@ -1938,16 +1938,29 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === ' ') {
     e.preventDefault();
     if (currentTab === 'subscriptions') {
-      // Toggle Watch Later for focused video
-      toggleWatchLater();
+      // Open video preview for focused video
+      const video = filteredVideos[focusedIndex];
+      if (video && video.id) {
+        pushModal('video', video);
+      } else {
+        showToast('No video selected', 'info');
+      }
     } else if (currentTab === 'channels') {
-      // Show similar channels for focused channel
+      // Open channel preview for focused channel
       const channel = filteredChannels[focusedIndex];
-      if (channel) showSimilarChannels(channel);
-    } else {
-      // Select (add to selection) in watch later tab - allows multi-select across the board
-      selectedIndices.add(focusedIndex);
-      renderVideos();
+      if (channel) {
+        pushModal('channel', channel);
+      } else {
+        showToast('No channel selected', 'info');
+      }
+    } else if (currentTab === 'watchlater') {
+      // Open video preview for focused video
+      const video = filteredVideos[focusedIndex];
+      if (video && video.id) {
+        pushModal('video', video);
+      } else {
+        showToast('No video selected', 'info');
+      }
     }
   } else if (e.key === 'v') {
     // Visual mode (not for channels)
