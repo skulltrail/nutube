@@ -1477,6 +1477,7 @@ function renderHelpModal() {
       { keys: ['x', 'd'], desc: 'Unsubscribe (press twice)' },
       { keys: ['z'], desc: 'Undo unsubscribe' },
       { keys: ['Space'], desc: 'Similar channels' },
+      { keys: ['p'], desc: 'Preview channel videos' },
     ];
   }
 
@@ -1771,18 +1772,13 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === ' ') {
     e.preventDefault();
     if (currentTab === 'subscriptions') {
-      // Open video preview for focused video
-      const video = filteredVideos[focusedIndex];
-      if (video && video.id) {
-        showVideoPreview(video);
-      } else {
-        showToast('No video selected', 'info');
-      }
+      // Toggle Watch Later status for focused video
+      toggleWatchLater();
     } else if (currentTab === 'channels') {
-      // Open channel preview for focused channel
+      // Show similar channels for focused channel
       const channel = filteredChannels[focusedIndex];
       if (channel) {
-        openChannelPreview(channel);
+        showSimilarChannels(channel);
       } else {
         showToast('No channel selected', 'info');
       }
@@ -1865,6 +1861,16 @@ document.addEventListener('keydown', (e) => {
     }
   } else if (e.key === 'r') {
     loadData();
+  } else if (e.key === 'p') {
+    // Preview channel (channels tab only)
+    if (currentTab === 'channels') {
+      const channel = filteredChannels[focusedIndex];
+      if (channel) {
+        openChannelPreview(channel);
+      } else {
+        showToast('No channel selected', 'info');
+      }
+    }
   } else if (e.key === 'z' && !e.ctrlKey && !e.metaKey) {
     e.preventDefault();
     if (currentTab === 'watchlater') {
