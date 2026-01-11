@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NuTube</title>
+  <link rel="icon" type="image/png" href="icons/icon48.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #0a0a0b;
+      --bg-secondary: #121214;
+      --bg-tertiary: #1a1a1d;
+      --bg-hover: #252529;
+      --bg-selected: #2d1f1f;
+      --border-color: #2a2a2e;
+      --text-primary: #e8e8e8;
+      --text-secondary: #888;
+      --text-muted: #555;
+      --accent: #ff4444;
+      --accent-dim: #992222;
+      --success: #44ff88;
+      --warning: #ffaa44;
+      --font-mono: 'JetBrains Mono', monospace;
+      --font-sans: 'Space Grotesk', sans-serif;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 1.5;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Layout */
+    .app {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      height: 100vh;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-secondary);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 4px;
+      object-fit: contain;
+    }
+
+    .logo-text {
+      font-family: var(--font-sans);
+      font-weight: 600;
+      font-size: 18px;
+      letter-spacing: -0.5px;
+    }
+
+    /* Tab Navigation */
+    .nav-tabs {
+      display: flex;
+      gap: 4px;
+      margin-left: 32px;
+    }
+
+    .nav-tab {
+      padding: 8px 16px;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .nav-tab:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    .nav-tab.active {
+      background: var(--bg-tertiary);
+      border-color: var(--border-color);
+      color: var(--text-primary);
+    }
+
+    .nav-tab .tab-count {
+      margin-left: 6px;
+      padding: 2px 6px;
+      background: var(--bg-hover);
+      border-radius: 10px;
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+
+    .nav-tab.active .tab-count {
+      background: var(--accent-dim);
+      color: var(--text-primary);
+    }
+
+    .stats {
+      display: flex;
+      gap: 24px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .stat {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .stat-value {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    /* Main content */
+    main {
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      overflow: hidden;
+    }
+
+    /* Video list wrapper - needed for proper scroll containment */
+    .video-list-wrapper {
+      display: flex;
+      flex-direction: column;
+      min-height: 0; /* Critical: allows flex child to shrink and scroll */
+      overflow: hidden;
+    }
+
+    /* Video list */
+    .video-list-container {
+      flex: 1;
+      min-height: 0; /* Critical: allows scrolling within flex container */
+      overflow-y: auto;
+      padding: 8px;
+    }
+
+    .video-list {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .video-item {
+      display: grid;
+      grid-template-columns: 32px 120px 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 8px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.1s;
+      border: 1px solid transparent;
+    }
+
+    .video-item:hover {
+      background: var(--bg-hover);
+    }
+
+    .video-item.selected {
+      background: var(--bg-selected);
+      border-color: var(--accent-dim);
+    }
+
+    .video-item.focused {
+      outline: 1px solid var(--accent);
+      outline-offset: -1px;
+    }
+
+    .video-index {
+      color: var(--text-muted);
+      font-size: 11px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .video-thumbnail {
+      width: 120px;
+      height: 68px;
+      border-radius: 4px;
+      object-fit: cover;
+      background: var(--bg-tertiary);
+    }
+
+    .video-info {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .video-title {
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-family: var(--font-sans);
+    }
+
+    .video-channel {
+      font-size: 11px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .video-meta {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    .video-duration {
+      background: var(--bg-tertiary);
+      padding: 2px 6px;
+      border-radius: 2px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Watch Later checkmark indicator */
+    .wl-check {
+      color: var(--accent);
+      font-size: 14px;
+      font-weight: bold;
+    }
+
+    /* Thumbnail wrapper for overlays */
+    .thumbnail-wrapper {
+      position: relative;
+      width: 120px;
+      height: 68px;
+      flex-shrink: 0;
+    }
+
+    .thumbnail-wrapper .video-thumbnail {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Watched video overlay */
+    .watched-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+    }
+
+    .watched-overlay span {
+      color: var(--text-muted);
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+
+    /* Dim watched video text slightly */
+    .video-item.watched .video-title,
+    .video-item.watched .video-channel {
+      opacity: 0.6;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      border-left: 1px solid var(--border-color);
+      background: var(--bg-secondary);
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      position: sticky;
+      top: 0;
+      height: calc(100vh - 120px);
+    }
+
+    .sidebar-section h3 {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      font-weight: 600;
+    }
+
+    /* Keyboard shortcuts */
+    .shortcuts {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .shortcut {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .key {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 24px;
+      height: 22px;
+      padding: 0 6px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 3px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .shortcut-desc {
+      color: var(--text-secondary);
+    }
+
+    /* Playlists */
+    .playlist-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .playlist-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: background 0.1s;
+    }
+
+    .playlist-item:hover {
+      background: var(--bg-hover);
+    }
+
+    .playlist-item.selected {
+      background: var(--bg-selected);
+      border: 1px solid var(--accent-dim);
+    }
+
+    .playlist-key {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 18px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 2px;
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+
+    .playlist-name {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .playlist-count {
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    /* Footer / Status bar */
+    footer {
+      padding: 8px 24px;
+      border-top: 1px solid var(--border-color);
+      background: var(--bg-secondary);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    .status-message {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-message.error {
+      color: var(--accent);
+    }
+
+    .status-message.success {
+      color: var(--success);
+    }
+
+    .selection-info {
+      color: var(--text-muted);
+    }
+
+    /* Modal */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.15s, visibility 0.15s;
+    }
+
+    .modal-overlay.visible {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .modal {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 20px;
+      min-width: 400px;
+      max-width: 500px;
+      transform: scale(0.95);
+      transition: transform 0.15s;
+    }
+
+    .modal-overlay.visible .modal {
+      transform: scale(1);
+    }
+
+    .modal h2 {
+      font-family: var(--font-sans);
+      font-size: 16px;
+      margin-bottom: 16px;
+    }
+
+    .modal-playlists {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 400px;
+      overflow-y: auto;
+      padding: 6px;
+      margin: -6px;
+      margin-bottom: 0;
+    }
+
+    .modal-playlist {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+
+    .modal-playlist:hover {
+      background: var(--bg-hover);
+    }
+
+    .modal-playlist.focused {
+      background: var(--bg-selected);
+      box-shadow: inset 0 0 0 1px var(--accent);
+    }
+
+    .modal-close {
+      margin-top: 16px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    .modal-hint {
+      margin-top: 12px;
+      padding: 8px 12px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 11px;
+      border-top: 1px solid var(--border-color);
+    }
+
+    .playlist-key.assigned {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+      font-weight: 600;
+    }
+
+    /* Loading */
+    .loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      gap: 16px;
+      color: var(--text-secondary);
+    }
+
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 2px solid var(--border-color);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Search */
+    .search-container {
+      padding: 0 8px 8px;
+    }
+
+    .search-input {
+      width: 100%;
+      padding: 10px 12px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .search-input:focus {
+      border-color: var(--accent);
+    }
+
+    .search-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    /* Empty state */
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      gap: 12px;
+      color: var(--text-secondary);
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: var(--bg-primary);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border-color);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--text-muted);
+    }
+
+    /* Toast notifications */
+    .toast-container {
+      position: fixed;
+      bottom: 60px;
+      right: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 500;
+    }
+
+    .toast {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      padding: 10px 16px;
+      border-radius: 4px;
+      font-size: 12px;
+      animation: slideIn 0.2s ease-out;
+    }
+
+    .toast.success {
+      border-color: var(--success);
+      color: var(--success);
+    }
+
+    .toast.error {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateX(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+
+    /* Channel items */
+    .channel-item {
+      display: grid;
+      grid-template-columns: 32px 56px 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 10px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.1s;
+      border: 1px solid transparent;
+    }
+
+    .channel-item:hover {
+      background: var(--bg-hover);
+    }
+
+    .channel-item.focused {
+      outline: 1px solid var(--accent);
+      outline-offset: -1px;
+    }
+
+    .channel-thumbnail {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      object-fit: cover;
+      background: var(--bg-tertiary);
+    }
+
+    .channel-avatar-fallback {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: var(--bg-tertiary);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      flex-shrink: 0;
+    }
+
+    /* Show fallback when no thumbnail exists */
+    .channel-item:not(:has(.channel-thumbnail)) .channel-avatar-fallback {
+      display: flex;
+    }
+
+    .channel-info {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .channel-name {
+      font-size: 14px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-family: var(--font-sans);
+    }
+
+    .channel-stats {
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    .channel-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn-unsub {
+      padding: 6px 12px;
+      background: transparent;
+      border: 1px solid var(--accent-dim);
+      border-radius: 4px;
+      color: var(--accent);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-unsub:hover {
+      background: var(--accent);
+      color: white;
+    }
+
+    .btn-similar {
+      padding: 6px 12px;
+      background: transparent;
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-secondary);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-similar:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    /* Activity indicator dot */
+    .activity-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 6px;
+      flex-shrink: 0;
+    }
+
+    .activity-dot.recent {
+      background: #4ade80;
+      box-shadow: 0 0 4px #4ade80;
+    }
+
+    .activity-dot.week {
+      background: #facc15;
+      box-shadow: 0 0 4px #facc15;
+    }
+
+    /* Channel name with activity indicator */
+    .channel-name-wrapper {
+      display: flex;
+      align-items: center;
+    }
+
+    /* Inline unsubscribe confirmation state */
+    .channel-item.confirming {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: var(--accent-dim);
+    }
+
+    .channel-item.confirming .channel-stats {
+      color: var(--accent);
+      font-style: italic;
+    }
+
+    /* Suggestions modal */
+    .suggestions-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+
+    .suggestion-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+
+    .suggestion-item:hover {
+      background: var(--bg-hover);
+    }
+
+    .suggestion-item.focused {
+      background: var(--bg-selected);
+      box-shadow: inset 0 0 0 1px var(--accent);
+    }
+
+    .suggestion-thumbnail {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      object-fit: cover;
+      background: var(--bg-tertiary);
+    }
+
+    .suggestion-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .suggestion-name {
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .suggestion-subs {
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    /* Confirm modal */
+    .confirm-buttons {
+      display: flex;
+      gap: 12px;
+      justify-content: flex-end;
+      margin-top: 20px;
+    }
+
+    .btn-cancel {
+      padding: 8px 16px;
+      background: transparent;
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-secondary);
+      cursor: pointer;
+    }
+
+    .btn-confirm {
+      padding: 8px 16px;
+      background: var(--accent);
+      border: none;
+      border-radius: 4px;
+      color: white;
+      cursor: pointer;
+    }
+
+    .btn-cancel:hover {
+      background: var(--bg-hover);
+    }
+
+    .btn-confirm:hover {
+      background: #cc3333;
+    }
+
+    /* Responsive: hide sidebar on narrow screens */
+    @media (max-width: 900px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        display: none;
+      }
+    }
+
+    /* Loading indicators */
+    .loading-indicator {
+      display: none;
+      width: 12px;
+      height: 12px;
+      margin-left: 6px;
+      border: 2px solid var(--border-color);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    .loading-indicator.active {
+      display: inline-block;
+    }
+
+    .load-more-indicator {
+      text-align: center;
+      padding: 16px;
+      color: var(--text-muted);
+      font-size: 12px;
+      display: none;
+    }
+
+    .load-more-indicator.loading {
+      display: block;
+    }
+
+    .load-more-indicator.loading::before {
+      content: '';
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      margin-right: 8px;
+      border: 2px solid var(--border-color);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      vertical-align: middle;
+    }
+
+    .load-more-indicator.error {
+      display: block;
+      color: var(--accent);
+    }
+
+    .load-more-indicator.exhausted {
+      display: block;
+      color: var(--text-muted);
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .tab-count.loading {
+      animation: pulse 1s ease-in-out infinite;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="logo">
+        <img class="logo-icon" src="icons/icon48.png" alt="NuTube">
+        <span class="logo-text">NuTube</span>
+      </div>
+      <nav class="nav-tabs">
+        <button class="nav-tab active" data-tab="watchlater" id="tab-watchlater">
+          Watch Later<span class="tab-count" id="watchlater-count">-</span>
+        </button>
+        <button class="nav-tab" data-tab="subscriptions" id="tab-subscriptions">
+          Subscriptions<span class="tab-count" id="subscriptions-count">-</span><span class="loading-indicator" id="subscriptions-loading"></span>
+        </button>
+        <button class="nav-tab" data-tab="channels" id="tab-channels">
+          Channels<span class="tab-count" id="channels-count">-</span>
+        </button>
+      </nav>
+      <div class="stats">
+        <div class="stat">
+          <span>Videos:</span>
+          <span class="stat-value" id="video-count">-</span>
+        </div>
+        <div class="stat">
+          <span>Selected:</span>
+          <span class="stat-value" id="selected-count">0</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div class="video-list-wrapper">
+        <div class="search-container">
+          <input 
+            type="text" 
+            class="search-input" 
+            id="search-input"
+            placeholder="/ to search..."
+            autocomplete="off"
+          >
+        </div>
+        <div class="video-list-container" id="video-list-container">
+          <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <span id="loading-text">Loading...</span>
+          </div>
+          <div class="video-list" id="video-list"></div>
+          <div class="load-more-indicator" id="load-more-indicator"></div>
+        </div>
+      </div>
+
+      <aside class="sidebar">
+        <div class="sidebar-section">
+          <h3>Keyboard Shortcuts</h3>
+          <div class="shortcuts" id="shortcuts-list"></div>
+        </div>
+
+        <div class="sidebar-section">
+          <h3>Your Playlists</h3>
+          <div class="playlist-list" id="playlist-list">
+            <div class="loading">
+              <div class="spinner"></div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <footer>
+      <div class="status-message" id="status-message">Ready</div>
+      <div class="selection-info" id="selection-info">
+        <span class="key">?</span> Help
+      </div>
+    </footer>
+  </div>
+
+  <!-- Move to Playlist Modal -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal">
+      <h2>Playlists</h2>
+      <div class="modal-playlists" id="modal-playlists"></div>
+      <div class="modal-close">Press <span class="key">Enter</span> to move &bull; <span class="key">Esc</span> to cancel</div>
+    </div>
+  </div>
+
+  <!-- Help Modal -->
+  <div class="modal-overlay" id="help-modal">
+    <div class="modal" style="min-width: 500px;">
+      <h2>Keyboard Shortcuts</h2>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
+        <div>
+          <h4 style="color: var(--text-muted); font-size: 11px; margin-bottom: 8px;">NAVIGATION</h4>
+          <div class="shortcuts">
+            <div class="shortcut"><span class="key">j</span><span class="key">↓</span><span class="shortcut-desc">Move down</span></div>
+            <div class="shortcut"><span class="key">k</span><span class="key">↑</span><span class="shortcut-desc">Move up</span></div>
+            <div class="shortcut"><span class="key">gg</span><span class="shortcut-desc">Go to top</span></div>
+            <div class="shortcut"><span class="key">G</span><span class="shortcut-desc">Go to bottom</span></div>
+            <div class="shortcut"><span class="key">/</span><span class="shortcut-desc">Search</span></div>
+          </div>
+          <h4 style="color: var(--text-muted); font-size: 11px; margin: 16px 0 8px;">SELECTION</h4>
+          <div class="shortcuts">
+            <div class="shortcut"><span class="key">Space</span><span class="shortcut-desc">Select / Toggle WL</span></div>
+            <div class="shortcut"><span class="key">v</span><span class="shortcut-desc">Visual mode</span></div>
+            <div class="shortcut"><span class="key">Ctrl+A</span><span class="shortcut-desc">Select all</span></div>
+            <div class="shortcut"><span class="key">Esc</span><span class="shortcut-desc">Clear selection</span></div>
+          </div>
+        </div>
+        <div>
+          <h4 style="color: var(--text-muted); font-size: 11px; margin-bottom: 8px;">ACTIONS</h4>
+          <div class="shortcuts">
+            <div class="shortcut"><span class="key">x</span><span class="key">d</span><span class="key">Del</span><span class="shortcut-desc">Delete</span></div>
+            <div class="shortcut"><span class="key">t</span><span class="shortcut-desc">Move to top</span></div>
+            <div class="shortcut"><span class="key">b</span><span class="shortcut-desc">Move to bottom</span></div>
+            <div class="shortcut"><span class="key">m</span><span class="shortcut-desc">Move to playlist</span></div>
+            <div class="shortcut"><span class="key">1-9</span><span class="shortcut-desc">Quick move</span></div>
+            <div class="shortcut"><span class="key">z</span><span class="shortcut-desc">Undo</span></div>
+          </div>
+          <h4 style="color: var(--text-muted); font-size: 11px; margin: 16px 0 8px;">OTHER</h4>
+          <div class="shortcuts">
+            <div class="shortcut"><span class="key">Tab</span><span class="shortcut-desc">Switch tabs</span></div>
+            <div class="shortcut"><span class="key">w</span><span class="shortcut-desc">Add to Watch Later</span></div>
+            <div class="shortcut"><span class="key">Enter</span><span class="shortcut-desc">Open in YouTube</span></div>
+            <div class="shortcut"><span class="key">r</span><span class="shortcut-desc">Refresh</span></div>
+            <div class="shortcut"><span class="key">?</span><span class="shortcut-desc">Toggle help</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-close">Press <span class="key">?</span> or <span class="key">Esc</span> to close</div>
+    </div>
+  </div>
+
+  <!-- Suggestions Modal -->
+  <div class="modal-overlay" id="suggestions-modal">
+    <div class="modal">
+      <h2 id="suggestions-title">Similar Channels</h2>
+      <div class="suggestions-list" id="suggestions-list"></div>
+      <div class="modal-close">Press <span class="key">Enter</span> to open channel &bull; <span class="key">Esc</span> to close</div>
+    </div>
+  </div>
+
+  <!-- Confirm Modal -->
+  <div class="modal-overlay" id="confirm-modal">
+    <div class="modal" style="min-width: 350px;">
+      <h2 id="confirm-title">Confirm</h2>
+      <p id="confirm-message" style="color: var(--text-secondary); margin: 16px 0;"></p>
+      <div class="confirm-buttons">
+        <button class="btn-cancel" id="confirm-cancel">Cancel</button>
+        <button class="btn-confirm" id="confirm-ok">Unsubscribe</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
