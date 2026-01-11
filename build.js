@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild';
-import { copyFileSync, mkdirSync, existsSync } from 'fs';
+import { copyFileSync, mkdirSync, existsSync, readdirSync } from 'fs';
 import { dirname } from 'path';
 
 const isWatch = process.argv.includes('--watch');
@@ -39,6 +39,16 @@ function copyStatic() {
   console.log('✓ Copied dashboard.html');
   copyFileSync('src/dashboard.js', 'dist/dashboard.js');
   console.log('✓ Copied dashboard.js');
+
+  // Copy icons from assets to dist
+  if (!existsSync('dist/icons')) {
+    mkdirSync('dist/icons', { recursive: true });
+  }
+  const icons = readdirSync('assets/icons');
+  for (const icon of icons) {
+    copyFileSync(`assets/icons/${icon}`, `dist/icons/${icon}`);
+  }
+  console.log(`✓ Copied ${icons.length} icons`);
 }
 
 async function build() {

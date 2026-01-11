@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="dist/icons/nutube.png" alt="NuTube Logo" width="140">
+  <img src="assets/logo.png" alt="NuTube Logo" width="140">
 </p>
 
 <h1 align="center">NuTube</h1>
