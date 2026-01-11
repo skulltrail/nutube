@@ -1,0 +1,256 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================================
+  # TypeScript Compilation Check
+  # ============================================================================
+  typecheck:
+    name: TypeScript Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run TypeScript check
+        run: npm run typecheck
+
+  # ============================================================================
+  # Linting
+  # ============================================================================
+  lint:
+    name: ESLint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+  # ============================================================================
+  # Unit Tests
+  # ============================================================================
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests with coverage
+        run: npm run test:coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 7
+
+  # ============================================================================
+  # Build
+  # ============================================================================
+  build:
+    name: Build Extension
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Verify build artifacts
+        run: |
+          echo "Checking build output..."
+          ls -la dist/
+
+          # Verify all required files exist
+          test -f dist/manifest.json || (echo "Missing manifest.json" && exit 1)
+          test -f dist/background.js || (echo "Missing background.js" && exit 1)
+          test -f dist/content.js || (echo "Missing content.js" && exit 1)
+          test -f dist/dashboard.html || (echo "Missing dashboard.html" && exit 1)
+          test -f dist/dashboard.js || (echo "Missing dashboard.js" && exit 1)
+
+          echo "All required files present!"
+
+      - name: Validate manifest.json
+        run: |
+          node -e "
+            const manifest = require('./dist/manifest.json');
+
+            // Validate manifest version
+            if (manifest.manifest_version !== 3) {
+              console.error('Expected manifest_version 3');
+              process.exit(1);
+            }
+
+            // Validate required fields
+            const required = ['name', 'version', 'permissions', 'background'];
+            for (const field of required) {
+              if (!manifest[field]) {
+                console.error('Missing required field: ' + field);
+                process.exit(1);
+              }
+            }
+
+            console.log('Manifest validation passed!');
+            console.log('Extension:', manifest.name, 'v' + manifest.version);
+          "
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-build
+          path: dist/
+          retention-days: 7
+
+  # ============================================================================
+  # E2E Tests (Chrome Extension)
+  # ============================================================================
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: extension-build
+          path: dist/
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+        env:
+          DISPLAY: ':99'
+
+      - name: Upload E2E test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-results
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
+  # ============================================================================
+  # Security Audit
+  # ============================================================================
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Run npm audit
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+  # ============================================================================
+  # All Checks Pass Gate
+  # ============================================================================
+  ci-success:
+    name: CI Success
+    runs-on: ubuntu-latest
+    needs: [typecheck, lint, test, build, e2e]
+    if: always()
+    steps:
+      - name: Check all jobs passed
+        env:
+          TYPECHECK_RESULT: ${{ needs.typecheck.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: |
+          if [[ "$TYPECHECK_RESULT" != "success" ]]; then
+            echo "TypeScript check failed"
+            exit 1
+          fi
+          if [[ "$LINT_RESULT" != "success" ]]; then
+            echo "Linting failed"
+            exit 1
+          fi
+          if [[ "$TEST_RESULT" != "success" ]]; then
+            echo "Unit tests failed"
+            exit 1
+          fi
+          if [[ "$BUILD_RESULT" != "success" ]]; then
+            echo "Build failed"
+            exit 1
+          fi
+          if [[ "$E2E_RESULT" != "success" ]]; then
+            echo "E2E tests failed"
+            exit 1
+          fi
+          echo "All CI checks passed!"
