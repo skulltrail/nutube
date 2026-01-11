@@ -2248,6 +2248,22 @@ videoListContainerEl.addEventListener('scroll', () => {
   }, 100);
 });
 
+// Preview modal click-to-close handlers
+document.getElementById('video-preview-modal').addEventListener('click', (e) => {
+  if (e.target.classList.contains('preview-modal')) {
+    popModal();
+  }
+});
+
+document.getElementById('channel-preview-modal').addEventListener('click', (e) => {
+  if (e.target.classList.contains('preview-modal')) {
+    popModal();
+  }
+});
+
+// Initialize YouTube API on load
+loadYouTubeAPI();
+
 // Initialize
 renderShortcuts();
 loadAllData();
