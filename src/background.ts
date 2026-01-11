@@ -1,22 +1,7 @@
 // Background service worker for NuTube
 // Relays messages between dashboard and content script running on YouTube
 
-// Message types
-type MessageType =
-  | { type: 'GET_WATCH_LATER' }
-  | { type: 'GET_SUBSCRIPTIONS' }
-  | { type: 'GET_MORE_SUBSCRIPTIONS' }
-  | { type: 'GET_PLAYLISTS' }
-  | { type: 'REMOVE_FROM_WATCH_LATER'; videoId: string; setVideoId: string }
-  | { type: 'ADD_TO_PLAYLIST'; videoId: string; playlistId: string }
-  | { type: 'ADD_TO_WATCH_LATER'; videoId: string }
-  | { type: 'MOVE_TO_TOP'; setVideoId: string; firstSetVideoId?: string }
-  | { type: 'MOVE_TO_BOTTOM'; setVideoId: string; lastSetVideoId?: string }
-  | { type: 'MOVE_TO_PLAYLIST'; videoId: string; setVideoId: string; playlistId: string }
-  | { type: 'GET_CHANNELS' }
-  | { type: 'GET_MORE_CHANNELS' }
-  | { type: 'UNSUBSCRIBE'; channelId: string }
-  | { type: 'GET_CHANNEL_SUGGESTIONS'; channelId: string };
+import { MessageType } from './types';
 
 // Find an existing YouTube tab or create one
 async function getYouTubeTab(): Promise<chrome.tabs.Tab> {
