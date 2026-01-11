@@ -24,6 +24,10 @@
   <img src="https://img.shields.io/badge/TypeScript-Strict-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
 </p>
 
+<p align="center">
+  <img src="assets/screenshots/watch-later.png" alt="NuTube Watch Later Interface" width="800">
+</p>
+
 ---
 
 ## 🚀 Quick Start
