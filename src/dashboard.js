@@ -1681,6 +1681,85 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
+  // Preview modal handling
+  if (isPreviewOpen()) {
+    e.preventDefault();
+    const topModal = modalStack[modalStack.length - 1];
+
+    if (topModal.type === 'video') {
+      // Video preview controls
+      switch (e.key) {
+        case 'Escape':
+        case 'q':
+          popModal();
+          break;
+        case 'h':
+        case 'ArrowLeft':
+          seekVideo(-5);
+          break;
+        case 'l':
+        case 'ArrowRight':
+          seekVideo(5);
+          break;
+        case 'j':
+        case 'ArrowDown':
+          seekVideo(-10);
+          break;
+        case 'k':
+        case 'ArrowUp':
+          seekVideo(10);
+          break;
+        case ' ':
+          togglePlayPause();
+          break;
+        case 'm':
+          toggleMute();
+          break;
+        case 'f':
+          if (player && player.getIframe) {
+            const iframe = player.getIframe();
+            if (iframe.requestFullscreen) {
+              iframe.requestFullscreen();
+            }
+          }
+          break;
+        case '0':
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9':
+          seekToPercent(parseInt(e.key) / 10);
+          break;
+      }
+    } else if (topModal.type === 'channel') {
+      // Channel preview controls
+      switch (e.key) {
+        case 'Escape':
+        case 'q':
+          popModal();
+          break;
+        case 'h':
+        case 'ArrowLeft':
+          scrollChannelVideos('left');
+          break;
+        case 'l':
+        case 'ArrowRight':
+          scrollChannelVideos('right');
+          break;
+        case 'Enter':
+        case ' ':
+          previewChannelVideo();
+          break;
+      }
+    }
+    return;
+  }
+
   // Help modal handling
   if (isHelpOpen) {
     if (e.key === 'Escape' || e.key === '?') {
