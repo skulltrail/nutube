@@ -29,9 +29,7 @@ let isSuggestionsOpen = false;
 let isConfirmOpen = false;
 let confirmCallback = null;
 
-// Preview modal state
-let modalStack = []; // Array of { type: 'video'|'channel', data: {...} }
-let player = null; // YouTube IFrame player instance
+// Channel preview state
 let channelVideoFocusIndex = 0;
 let currentChannelVideos = [];
 
@@ -698,159 +696,31 @@ function recalculateChannelActivity() {
   }
 }
 
-// Modal Stack Management
-function pushModal(type, data) {
-  modalStack.push({ type, data });
-  renderTopModal();
+// Channel Preview Modal Management
+// Note: Video preview opens directly on YouTube (no modal needed due to CSP restrictions)
+
+let isChannelPreviewOpen = false;
+
+function openChannelPreview(channel) {
+  isChannelPreviewOpen = true;
+  showChannelPreview(channel);
 }
 
-function popModal() {
-  if (modalStack.length === 0) return false;
-
-  const popped = modalStack.pop();
-
-  // Cleanup popped modal
-  if (popped.type === 'video') {
-    destroyPlayer();
-    document.getElementById('video-preview-modal').classList.remove('visible');
-  } else if (popped.type === 'channel') {
-    document.getElementById('channel-preview-modal').classList.remove('visible');
-  }
-
-  // Show next modal in stack or return to dashboard
-  if (modalStack.length > 0) {
-    renderTopModal();
-  }
-
+function closeChannelPreview() {
+  if (!isChannelPreviewOpen) return false;
+  isChannelPreviewOpen = false;
+  document.getElementById('channel-preview-modal').classList.remove('visible');
+  currentChannelVideos = [];
   return true;
 }
 
-function renderTopModal() {
-  if (modalStack.length === 0) return;
-
-  const top = modalStack[modalStack.length - 1];
-
-  // Hide all preview modals first
-  document.getElementById('video-preview-modal').classList.remove('visible');
-  document.getElementById('channel-preview-modal').classList.remove('visible');
-
-  if (top.type === 'video') {
-    showVideoPreview(top.data);
-  } else if (top.type === 'channel') {
-    showChannelPreview(top.data);
-  }
+// Video Preview - opens directly on YouTube since embeds don't work from chrome-extension:// origin
+function showVideoPreview(video) {
+  window.open(`https://www.youtube.com/watch?v=${video.id}`, '_blank');
 }
 
-function isPreviewOpen() {
-  return modalStack.length > 0;
-}
-
-// YouTube IFrame API
-function loadYouTubeAPI() {
-  if (window.YT) return Promise.resolve();
-
-  return new Promise((resolve) => {
-    const tag = document.createElement('script');
-    tag.src = 'https://www.youtube.com/iframe_api';
-    const firstScriptTag = document.getElementsByTagName('script')[0];
-    firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-
-    window.onYouTubeIframeAPIReady = () => {
-      resolve();
-    };
-  });
-}
-
-// Video Preview
-async function showVideoPreview(video) {
-  const modal = document.getElementById('video-preview-modal');
-  const titleEl = document.getElementById('preview-video-title');
-  const channelEl = document.getElementById('preview-video-channel');
-
-  titleEl.textContent = video.title;
-  channelEl.textContent = video.channel;
-
-  modal.classList.add('visible');
-
-  // Wait for YouTube API if needed
-  await loadYouTubeAPI();
-
-  // Destroy existing player if any
-  destroyPlayer();
-
-  // Create new player
-  player = new YT.Player('preview-player', {
-    height: '100%',
-    width: '100%',
-    videoId: video.id,
-    playerVars: {
-      autoplay: 1,
-      modestbranding: 1,
-      rel: 0,
-      enablejsapi: 1,
-    },
-    events: {
-      onReady: (event) => {
-        event.target.playVideo();
-      },
-    },
-  });
-}
-
-function destroyPlayer() {
-  if (player && player.destroy) {
-    try {
-      player.destroy();
-    } catch (e) {
-      console.warn('Player destroy error:', e);
-    }
-  }
-  player = null;
-
-  // Reset the player container
-  const container = document.querySelector('.preview-player-container');
-  if (container) {
-    container.textContent = '';
-    const playerDiv = document.createElement('div');
-    playerDiv.id = 'preview-player';
-    container.appendChild(playerDiv);
-  }
-}
-
-// Video player controls
-function seekVideo(seconds) {
-  if (!player || !player.getCurrentTime) return;
-  const current = player.getCurrentTime();
-  player.seekTo(current + seconds, true);
-}
-
-function togglePlayPause() {
-  if (!player || !player.getPlayerState) return;
-  const state = player.getPlayerState();
-  if (state === YT.PlayerState.PLAYING) {
-    player.pauseVideo();
-  } else {
-    player.playVideo();
-  }
-}
-
-function toggleMute() {
-  if (!player || !player.isMuted) return;
-  if (player.isMuted()) {
-    player.unMute();
-  } else {
-    player.mute();
-  }
-}
-
-function seekToPercent(percent) {
-  if (!player || !player.getDuration) return;
-  const duration = player.getDuration();
-  player.seekTo(duration * percent, true);
-}
-
-// Channel Preview
-function showChannelPreview(channel) {
+// Channel Preview - fetches videos from the channel's profile
+async function showChannelPreview(channel) {
   const modal = document.getElementById('channel-preview-modal');
   const bannerEl = document.getElementById('channel-preview-banner');
   const avatarEl = document.getElementById('channel-preview-avatar');
@@ -866,29 +736,46 @@ function showChannelPreview(channel) {
   // Banner - use a gradient if no banner available
   bannerEl.style.backgroundImage = '';
 
-  // Get videos for this channel from subscriptionVideos
-  currentChannelVideos = subscriptionVideos
-    .filter(v => v.channelId === channel.id)
-    .sort((a, b) => {
-      // Sort by publishedAt timestamp (most recent first)
-      const aTime = parseRelativeTime(a.publishedAt) || 0;
-      const bTime = parseRelativeTime(b.publishedAt) || 0;
-      return bTime - aTime;
-    });
-
-  channelVideoFocusIndex = 0;
-
-  if (currentChannelVideos.length === 0) {
-    videosEl.textContent = '';
-    const noVideosDiv = document.createElement('div');
-    noVideosDiv.className = 'channel-no-videos';
-    noVideosDiv.textContent = 'No recent videos loaded';
-    videosEl.appendChild(noVideosDiv);
-  } else {
-    renderChannelVideos();
-  }
+  // Show loading state
+  videosEl.textContent = '';
+  const loadingDiv = document.createElement('div');
+  loadingDiv.className = 'channel-no-videos';
+  loadingDiv.textContent = 'Loading videos...';
+  videosEl.appendChild(loadingDiv);
 
   modal.classList.add('visible');
+
+  // Fetch videos from the channel's profile
+  try {
+    const response = await sendMessage({ type: 'GET_CHANNEL_VIDEOS', channelId: channel.id });
+    if (response.success && response.data) {
+      currentChannelVideos = response.data;
+      channelVideoFocusIndex = 0;
+
+      if (currentChannelVideos.length === 0) {
+        videosEl.textContent = '';
+        const noVideosDiv = document.createElement('div');
+        noVideosDiv.className = 'channel-no-videos';
+        noVideosDiv.textContent = 'No videos found';
+        videosEl.appendChild(noVideosDiv);
+      } else {
+        renderChannelVideos();
+      }
+    } else {
+      videosEl.textContent = '';
+      const errorDiv = document.createElement('div');
+      errorDiv.className = 'channel-no-videos';
+      errorDiv.textContent = 'Failed to load videos';
+      videosEl.appendChild(errorDiv);
+    }
+  } catch (e) {
+    console.error('Error fetching channel videos:', e);
+    videosEl.textContent = '';
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'channel-no-videos';
+    errorDiv.textContent = 'Error loading videos';
+    videosEl.appendChild(errorDiv);
+  }
 }
 
 function renderChannelVideos() {
@@ -939,7 +826,8 @@ function previewChannelVideo() {
   const video = currentChannelVideos[channelVideoFocusIndex];
   if (!video) return;
 
-  pushModal('video', video);
+  // Open video directly (no modal stack since it opens in new tab)
+  showVideoPreview(video);
 }
 
 function scrollChannelVideos(direction) {
@@ -1681,81 +1569,26 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Preview modal handling
-  if (isPreviewOpen()) {
+  // Channel preview modal handling
+  if (isChannelPreviewOpen) {
     e.preventDefault();
-    const topModal = modalStack[modalStack.length - 1];
-
-    if (topModal.type === 'video') {
-      // Video preview controls
-      switch (e.key) {
-        case 'Escape':
-        case 'q':
-          popModal();
-          break;
-        case 'h':
-        case 'ArrowLeft':
-          seekVideo(-5);
-          break;
-        case 'l':
-        case 'ArrowRight':
-          seekVideo(5);
-          break;
-        case 'j':
-        case 'ArrowDown':
-          seekVideo(-10);
-          break;
-        case 'k':
-        case 'ArrowUp':
-          seekVideo(10);
-          break;
-        case ' ':
-          togglePlayPause();
-          break;
-        case 'm':
-          toggleMute();
-          break;
-        case 'f':
-          if (player && player.getIframe) {
-            const iframe = player.getIframe();
-            if (iframe.requestFullscreen) {
-              iframe.requestFullscreen();
-            }
-          }
-          break;
-        case '0':
-        case '1':
-        case '2':
-        case '3':
-        case '4':
-        case '5':
-        case '6':
-        case '7':
-        case '8':
-        case '9':
-          seekToPercent(parseInt(e.key) / 10);
-          break;
-      }
-    } else if (topModal.type === 'channel') {
-      // Channel preview controls
-      switch (e.key) {
-        case 'Escape':
-        case 'q':
-          popModal();
-          break;
-        case 'h':
-        case 'ArrowLeft':
-          scrollChannelVideos('left');
-          break;
-        case 'l':
-        case 'ArrowRight':
-          scrollChannelVideos('right');
-          break;
-        case 'Enter':
-        case ' ':
-          previewChannelVideo();
-          break;
-      }
+    switch (e.key) {
+      case 'Escape':
+      case 'q':
+        closeChannelPreview();
+        break;
+      case 'h':
+      case 'ArrowLeft':
+        scrollChannelVideos('left');
+        break;
+      case 'l':
+      case 'ArrowRight':
+        scrollChannelVideos('right');
+        break;
+      case 'Enter':
+      case ' ':
+        previewChannelVideo();
+        break;
     }
     return;
   }
@@ -1941,7 +1774,7 @@ document.addEventListener('keydown', (e) => {
       // Open video preview for focused video
       const video = filteredVideos[focusedIndex];
       if (video && video.id) {
-        pushModal('video', video);
+        showVideoPreview(video);
       } else {
         showToast('No video selected', 'info');
       }
@@ -1949,7 +1782,7 @@ document.addEventListener('keydown', (e) => {
       // Open channel preview for focused channel
       const channel = filteredChannels[focusedIndex];
       if (channel) {
-        pushModal('channel', channel);
+        openChannelPreview(channel);
       } else {
         showToast('No channel selected', 'info');
       }
@@ -1957,7 +1790,7 @@ document.addEventListener('keydown', (e) => {
       // Open video preview for focused video
       const video = filteredVideos[focusedIndex];
       if (video && video.id) {
-        pushModal('video', video);
+        showVideoPreview(video);
       } else {
         showToast('No video selected', 'info');
       }
@@ -2248,21 +2081,38 @@ videoListContainerEl.addEventListener('scroll', () => {
   }, 100);
 });
 
-// Preview modal click-to-close handlers
-document.getElementById('video-preview-modal').addEventListener('click', (e) => {
-  if (e.target.classList.contains('preview-modal')) {
-    popModal();
-  }
-});
-
+// Channel preview modal click-to-close handler
 document.getElementById('channel-preview-modal').addEventListener('click', (e) => {
   if (e.target.classList.contains('preview-modal')) {
-    popModal();
+    closeChannelPreview();
   }
 });
 
-// Initialize YouTube API on load
-loadYouTubeAPI();
+// Ensure keyboard bindings work when returning to the dashboard
+// After opening a video in a new tab and returning, focus can be lost
+function restoreFocus() {
+  const searchInput = document.getElementById('search-input');
+  // Only restore focus if search isn't active
+  if (document.activeElement !== searchInput) {
+    document.body.focus();
+  }
+}
+
+window.addEventListener('focus', restoreFocus);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    // Small delay to let the browser settle
+    setTimeout(restoreFocus, 50);
+  }
+});
+
+// Also restore focus on any click in the app
+document.querySelector('.app')?.addEventListener('click', (e) => {
+  // Don't interfere with search input or buttons
+  if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
+    restoreFocus();
+  }
+});
 
 // Initialize
 renderShortcuts();
