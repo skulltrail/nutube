@@ -1,4 +1,8 @@
 node_modules/
 *.log
 .DS_Store
+
+# Playwright
 .playwright-mcp/
+playwright-report/
+test-results/
