@@ -35,6 +35,8 @@ const contentBuildOptions = {
 
 // Copy static files
 function copyStatic() {
+  copyFileSync('src/manifest.json', 'dist/manifest.json');
+  console.log('✓ Copied manifest.json');
   copyFileSync('src/dashboard.html', 'dist/dashboard.html');
   console.log('✓ Copied dashboard.html');
   copyFileSync('src/dashboard.js', 'dist/dashboard.js');

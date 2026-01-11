@@ -28,7 +28,8 @@ ci:
 	exit $$EXIT_CODE
 
 # Internal target that runs the actual CI steps
-ci-run: typecheck lint test build e2e
+# Note: clean is run first to simulate fresh CI checkout (prevents stale artifact issues)
+ci-run: clean typecheck lint test build e2e
 
 # Generate summary table from CI log
 ci-summary:
@@ -110,7 +111,8 @@ ci-quick:
 	exit $$EXIT_CODE
 
 # Internal target for quick CI
-ci-quick-run: typecheck lint test build
+# Note: clean is run first to simulate fresh CI checkout (prevents stale artifact issues)
+ci-quick-run: clean typecheck lint test build
 
 # Generate summary table for quick CI
 ci-quick-summary:

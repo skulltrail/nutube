@@ -431,7 +431,7 @@ async function addToWatchLater(videoId: string): Promise<{ success: boolean; err
     if (e.message?.includes('409')) {
       return { success: true };
     }
-    console.error('Failed to add to Watch Later:', e);
+    console.warn('[NuTube] Failed to add to Watch Later:', e.message || String(e));
     return { success: false, error: e.message || String(e) };
   }
 }
@@ -860,7 +860,8 @@ async function unsubscribeFromChannel(channelId: string): Promise<{ success: boo
     });
     return { success: true };
   } catch (e: any) {
-    console.error('Unsubscribe error:', e);
+    // Use warn instead of error to avoid polluting console with red errors
+    console.warn('[NuTube] Unsubscribe failed:', e.message || String(e));
     return { success: false, error: e.message || String(e) };
   }
 }
@@ -877,7 +878,7 @@ async function subscribeToChannel(channelId: string): Promise<{ success: boolean
     if (e.message?.includes('409')) {
       return { success: true };
     }
-    console.error('Subscribe error:', e);
+    console.warn('[NuTube] Subscribe failed:', e.message || String(e));
     return { success: false, error: e.message || String(e) };
   }
 }
@@ -1127,7 +1128,7 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendRespons
           sendResponse({ success: false, error: 'Unknown message type' });
       }
     } catch (error) {
-      console.error('Content script error:', error);
+      console.warn('[NuTube] Content script error:', error);
       sendResponse({ success: false, error: String(error) });
     }
   })();

@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "NuTube",
+  "version": "1.0.0",
+  "description": "YouTube for keyboard warriors",
+  "permissions": [
+    "cookies",
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*", "https://youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "NuTube",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "chrome_url_overrides": {},
+  "web_accessible_resources": [
+    {
+      "resources": ["dashboard.html", "dashboard.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

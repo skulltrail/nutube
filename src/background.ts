@@ -3,8 +3,25 @@
 
 import { MessageType } from './types';
 
+// Singleton promise to prevent race conditions when multiple messages arrive simultaneously
+let youTubeTabPromise: Promise<chrome.tabs.Tab> | null = null;
+
 // Find an existing YouTube tab or create one
 async function getYouTubeTab(): Promise<chrome.tabs.Tab> {
+  // If we're already getting/creating a tab, wait for that instead of creating another
+  if (youTubeTabPromise) {
+    return youTubeTabPromise;
+  }
+
+  youTubeTabPromise = getYouTubeTabImpl();
+  try {
+    return await youTubeTabPromise;
+  } finally {
+    youTubeTabPromise = null;
+  }
+}
+
+async function getYouTubeTabImpl(): Promise<chrome.tabs.Tab> {
   // First, try to find an existing YouTube tab
   const tabs = await chrome.tabs.query({ url: ['https://www.youtube.com/*', 'https://youtube.com/*'] });
 
