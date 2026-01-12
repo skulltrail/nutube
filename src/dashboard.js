@@ -113,56 +113,133 @@ function setLoadMoreState(state) {
 }
 
 // Render keyboard shortcuts based on current tab
+// Safe: all content is hardcoded static strings, no user input
 function renderShortcuts() {
-  const commonShortcuts = [
-    { keys: ['j', 'k'], desc: 'Navigate down/up' },
-    { keys: ['g', 'g'], desc: 'Go to top' },
-    { keys: ['G'], desc: 'Go to bottom' },
-    { keys: ['/'], desc: 'Search' },
-    { keys: ['Esc'], desc: 'Clear/Cancel' },
-    { keys: ['Tab', '⇧Tab'], desc: 'Next/prev tab' },
-    { keys: ['Enter'], desc: 'Open in YouTube' },
-    { keys: ['r'], desc: 'Refresh list' },
-    { keys: ['?'], desc: 'Toggle help' },
-  ];
+  // Define shortcut categories per tab
+  const categories = {
+    watchlater: [
+      {
+        title: 'Actions',
+        shortcuts: [
+          { keys: ['x', 'd'], desc: 'Delete' },
+          { keys: ['m'], desc: 'Move to playlist' },
+          { keys: ['1-9'], desc: 'Quick move' },
+          { keys: ['t', 'b'], desc: 'Move top/bottom' },
+          { keys: ['u'], desc: 'Undo' },
+        ]
+      },
+      {
+        title: 'Selection',
+        shortcuts: [
+          { keys: ['v'], desc: 'Visual mode' },
+          { keys: ['Space'], desc: 'Preview' },
+        ]
+      },
+      {
+        title: 'Navigate',
+        shortcuts: [
+          { keys: ['j', 'k'], desc: 'Up/down' },
+          { keys: ['gg', 'G'], desc: 'Top/bottom' },
+          { keys: ['⌃d', '⌃u'], desc: 'Page down/up' },
+          { keys: ['/'], desc: 'Search' },
+        ]
+      },
+      {
+        title: 'Other',
+        shortcuts: [
+          { keys: ['o', '↵'], desc: 'Open' },
+          { keys: ['y'], desc: 'Copy URL' },
+          { keys: ['Tab'], desc: 'Switch tab' },
+          { keys: ['?'], desc: 'Help' },
+        ]
+      },
+    ],
+    subscriptions: [
+      {
+        title: 'Actions',
+        shortcuts: [
+          { keys: ['Space'], desc: 'Toggle Watch Later' },
+          { keys: ['w'], desc: 'Add to Watch Later' },
+          { keys: ['m'], desc: 'Add to playlist' },
+          { keys: ['1-9'], desc: 'Quick add' },
+        ]
+      },
+      {
+        title: 'Selection',
+        shortcuts: [
+          { keys: ['v'], desc: 'Visual mode' },
+        ]
+      },
+      {
+        title: 'Navigate',
+        shortcuts: [
+          { keys: ['j', 'k'], desc: 'Up/down' },
+          { keys: ['gg', 'G'], desc: 'Top/bottom' },
+          { keys: ['⌃d', '⌃u'], desc: 'Page down/up' },
+          { keys: ['/'], desc: 'Search' },
+        ]
+      },
+      {
+        title: 'Other',
+        shortcuts: [
+          { keys: ['o', '↵'], desc: 'Open' },
+          { keys: ['y'], desc: 'Copy URL' },
+          { keys: ['Tab'], desc: 'Switch tab' },
+          { keys: ['?'], desc: 'Help' },
+        ]
+      },
+    ],
+    channels: [
+      {
+        title: 'Actions',
+        shortcuts: [
+          { keys: ['Space', 'p'], desc: 'Preview' },
+          { keys: ['x', 'd'], desc: 'Unsubscribe' },
+          { keys: ['u'], desc: 'Undo' },
+        ]
+      },
+      {
+        title: 'Navigate',
+        shortcuts: [
+          { keys: ['j', 'k'], desc: 'Up/down' },
+          { keys: ['gg', 'G'], desc: 'Top/bottom' },
+          { keys: ['⌃d', '⌃u'], desc: 'Page down/up' },
+          { keys: ['/'], desc: 'Search' },
+        ]
+      },
+      {
+        title: 'Preview Modal',
+        shortcuts: [
+          { keys: ['h', 'l'], desc: 'Scroll videos' },
+          { keys: ['0', '$'], desc: 'First/last' },
+          { keys: ['↵'], desc: 'Watch video' },
+          { keys: ['q'], desc: 'Close' },
+        ]
+      },
+      {
+        title: 'Other',
+        shortcuts: [
+          { keys: ['o', '↵'], desc: 'Open channel' },
+          { keys: ['y'], desc: 'Copy URL' },
+          { keys: ['Tab'], desc: 'Switch tab' },
+          { keys: ['?'], desc: 'Help' },
+        ]
+      },
+    ],
+  };
 
-  const watchLaterShortcuts = [
-    { keys: ['Space'], desc: 'Preview video' },
-    { keys: ['v'], desc: 'Visual mode (range)' },
-    { keys: ['x', 'd', 'Del'], desc: 'Delete' },
-    { keys: ['t'], desc: 'Move to top' },
-    { keys: ['b'], desc: 'Move to bottom' },
-    { keys: ['m'], desc: 'Move to playlist' },
-    { keys: ['1-9'], desc: 'Quick move' },
-    { keys: ['z'], desc: 'Undo last action' },
-  ];
+  const tabCategories = categories[currentTab] || categories.watchlater;
 
-  const subscriptionsShortcuts = [
-    { keys: ['Space'], desc: 'Preview video' },
-    { keys: ['v'], desc: 'Visual mode (range)' },
-    { keys: ['w'], desc: 'Add to Watch Later' },
-  ];
-
-  const channelsShortcuts = [
-    { keys: ['x', 'd'], desc: 'Unsubscribe' },
-    { keys: ['z'], desc: 'Undo unsubscribe' },
-    { keys: ['Space'], desc: 'Preview channel' },
-  ];
-
-  let shortcuts = [...commonShortcuts];
-  if (currentTab === 'watchlater') {
-    shortcuts = [...watchLaterShortcuts, ...commonShortcuts];
-  } else if (currentTab === 'subscriptions') {
-    shortcuts = [...subscriptionsShortcuts, ...commonShortcuts];
-  } else if (currentTab === 'channels') {
-    shortcuts = [...channelsShortcuts, ...commonShortcuts];
-  }
-
-  // Safe: all content is hardcoded static strings, no user input
-  shortcutsList.innerHTML = shortcuts.map(s => `
-    <div class="shortcut">
-      ${s.keys.map(k => `<span class="key">${k}</span>`).join('')}
-      <span class="shortcut-desc">${s.desc}</span>
+  // Render categorized shortcuts (safe: all content is static)
+  shortcutsList.innerHTML = tabCategories.map(cat => `
+    <div class="shortcut-category">
+      <div class="shortcut-category-title">${cat.title}</div>
+      ${cat.shortcuts.map(s => `
+        <div class="shortcut">
+          ${s.keys.map(k => `<span class="key">${k}</span>`).join('')}
+          <span class="shortcut-desc">${s.desc}</span>
+        </div>
+      `).join('')}
     </div>
   `).join('');
 }
@@ -1520,63 +1597,70 @@ function closeModal() {
 }
 
 // Render dynamic help modal content based on current tab
+// Safe: all content is hardcoded static strings, no user input
 function renderHelpModal() {
   const modalContent = helpModal.querySelector('.modal');
   if (!modalContent) return;
 
   // Define shortcuts by category for each tab
   const navigationShortcuts = [
-    { keys: ['j', '↓'], desc: 'Move down' },
-    { keys: ['k', '↑'], desc: 'Move up' },
-    { keys: ['gg'], desc: 'Go to top' },
-    { keys: ['G'], desc: 'Go to bottom' },
+    { keys: ['j', 'k'], desc: 'Move down/up' },
+    { keys: ['gg', 'G'], desc: 'Go to top/bottom' },
+    { keys: ['⌃d', '⌃u'], desc: 'Half page down/up' },
     { keys: ['/'], desc: 'Search' },
+    { keys: ['Esc'], desc: 'Clear/Cancel' },
   ];
 
   const commonShortcuts = [
-    { keys: ['Tab', '⇧Tab'], desc: 'Next/prev tab' },
-    { keys: ['Enter'], desc: 'Open in YouTube' },
+    { keys: ['o', 'Enter'], desc: 'Open in YouTube' },
+    { keys: ['y'], desc: 'Copy URL' },
+    { keys: ['Tab'], desc: 'Next/prev tab' },
     { keys: ['r'], desc: 'Refresh' },
-    { keys: ['Esc'], desc: 'Clear/Cancel' },
     { keys: ['?'], desc: 'Toggle help' },
   ];
 
   let actionsShortcuts = [];
   let selectionShortcuts = [];
+  let previewShortcuts = [];
   let tabTitle = '';
 
   if (currentTab === 'watchlater') {
     tabTitle = 'Watch Later';
     selectionShortcuts = [
-      { keys: ['Space'], desc: 'Select video' },
-      { keys: ['v'], desc: 'Visual mode (range)' },
-      { keys: ['Ctrl+A'], desc: 'Select all' },
+      { keys: ['v'], desc: 'Visual mode (range select)' },
+      { keys: ['Space'], desc: 'Preview video' },
+      { keys: ['⌃a'], desc: 'Select all' },
     ];
     actionsShortcuts = [
-      { keys: ['x', 'd', 'Del'], desc: 'Delete' },
-      { keys: ['t'], desc: 'Move to top' },
-      { keys: ['b'], desc: 'Move to bottom' },
+      { keys: ['x', 'd'], desc: 'Delete' },
       { keys: ['m'], desc: 'Move to playlist' },
-      { keys: ['1-9'], desc: 'Quick move' },
-      { keys: ['z'], desc: 'Undo' },
+      { keys: ['1-9'], desc: 'Quick move to playlist' },
+      { keys: ['t', 'b'], desc: 'Move to top/bottom' },
+      { keys: ['u', 'z'], desc: 'Undo' },
     ];
   } else if (currentTab === 'subscriptions') {
     tabTitle = 'Subscriptions';
     selectionShortcuts = [
+      { keys: ['v'], desc: 'Visual mode (range select)' },
       { keys: ['Space'], desc: 'Toggle Watch Later' },
-      { keys: ['v'], desc: 'Visual mode (range)' },
     ];
     actionsShortcuts = [
       { keys: ['w'], desc: 'Add to Watch Later' },
+      { keys: ['m'], desc: 'Add to playlist' },
+      { keys: ['1-9'], desc: 'Quick add to playlist' },
     ];
   } else if (currentTab === 'channels') {
     tabTitle = 'Channels';
-    selectionShortcuts = [];
     actionsShortcuts = [
+      { keys: ['Space', 'p'], desc: 'Preview channel' },
       { keys: ['x', 'd'], desc: 'Unsubscribe (press twice)' },
-      { keys: ['z'], desc: 'Undo unsubscribe' },
-      { keys: ['Space'], desc: 'Similar channels' },
-      { keys: ['p'], desc: 'Preview channel videos' },
+      { keys: ['u', 'z'], desc: 'Undo unsubscribe' },
+    ];
+    previewShortcuts = [
+      { keys: ['h', 'l'], desc: 'Scroll videos left/right' },
+      { keys: ['0', '$'], desc: 'Jump to first/last video' },
+      { keys: ['Enter', 'Space'], desc: 'Watch focused video' },
+      { keys: ['q', 'Esc'], desc: 'Close preview' },
     ];
   }
 
@@ -1597,6 +1681,13 @@ function renderHelpModal() {
     leftColumn += `
       <h4 style="color: var(--text-muted); font-size: 11px; margin: 16px 0 8px;">SELECTION</h4>
       <div class="shortcuts">${renderShortcutGroup(selectionShortcuts)}</div>
+    `;
+  }
+
+  if (previewShortcuts.length > 0) {
+    leftColumn += `
+      <h4 style="color: var(--text-muted); font-size: 11px; margin: 16px 0 8px;">PREVIEW MODAL</h4>
+      <div class="shortcuts">${renderShortcutGroup(previewShortcuts)}</div>
     `;
   }
 

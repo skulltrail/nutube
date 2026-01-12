@@ -325,33 +325,56 @@
     .shortcuts {
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 6px;
+    }
+
+    .shortcut-category {
+      margin-bottom: 12px;
+    }
+
+    .shortcut-category:last-child {
+      margin-bottom: 0;
+    }
+
+    .shortcut-category-title {
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      font-weight: 600;
     }
 
     .shortcut {
       display: flex;
       align-items: center;
-      gap: 8px;
-      font-size: 12px;
+      gap: 4px;
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+
+    .shortcut:last-child {
+      margin-bottom: 0;
     }
 
     .key {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-width: 24px;
-      height: 22px;
-      padding: 0 6px;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 4px;
       background: var(--bg-tertiary);
       border: 1px solid var(--border-color);
-      border-radius: 3px;
-      font-size: 11px;
+      border-radius: 2px;
+      font-size: 10px;
       font-weight: 500;
       color: var(--text-primary);
     }
 
     .shortcut-desc {
       color: var(--text-secondary);
+      margin-left: 4px;
     }
 
     /* Playlists */
