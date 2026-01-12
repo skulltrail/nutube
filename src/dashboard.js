@@ -1776,6 +1776,17 @@ document.addEventListener('keydown', (e) => {
       case 'ArrowRight':
         scrollChannelVideos('right');
         break;
+      case '^':
+      case '0':
+        // Jump to first video (vim: beginning of line)
+        channelVideoFocusIndex = 0;
+        renderChannelVideos();
+        break;
+      case '$':
+        // Jump to last video (vim: end of line)
+        channelVideoFocusIndex = Math.max(0, currentChannelVideos.length - 1);
+        renderChannelVideos();
+        break;
       case 'Enter':
       case ' ':
         previewChannelVideo();
@@ -1964,16 +1975,39 @@ document.addEventListener('keydown', (e) => {
     } else {
       renderVideos();
     }
+  } else if (e.key === 'd' && e.ctrlKey) {
+    // Ctrl+d: half page down (vim-style)
+    e.preventDefault();
+    if (pendingUnsubscribe) cancelUnsubscribeConfirm();
+    const maxIndex = currentTab === 'channels' ? filteredChannels.length - 1 : filteredVideos.length - 1;
+    const pageSize = Math.floor(window.innerHeight / 80 / 2); // ~half visible items
+    focusedIndex = Math.min(focusedIndex + pageSize, maxIndex);
+    if (currentTab === 'channels') {
+      renderChannels();
+    } else {
+      renderVideos();
+    }
+  } else if (e.key === 'u' && e.ctrlKey) {
+    // Ctrl+u: half page up (vim-style)
+    e.preventDefault();
+    if (pendingUnsubscribe) cancelUnsubscribeConfirm();
+    const pageSize = Math.floor(window.innerHeight / 80 / 2);
+    focusedIndex = Math.max(focusedIndex - pageSize, 0);
+    if (currentTab === 'channels') {
+      renderChannels();
+    } else {
+      renderVideos();
+    }
   } else if (e.key === ' ') {
     e.preventDefault();
     if (currentTab === 'subscriptions') {
       // Toggle Watch Later status for focused video
       toggleWatchLater();
     } else if (currentTab === 'channels') {
-      // Show similar channels for focused channel
+      // Preview channel (same as 'p')
       const channel = filteredChannels[focusedIndex];
       if (channel) {
-        showSimilarChannels(channel);
+        openChannelPreview(channel);
       } else {
         showToast('No channel selected', 'info');
       }
@@ -2094,6 +2128,50 @@ document.addEventListener('keydown', (e) => {
       selectedIndices.add(i);
     }
     renderVideos();
+  } else if (e.key === 'u' && !e.ctrlKey && !e.metaKey) {
+    // u: undo (vim-style, alternative to z)
+    e.preventDefault();
+    if (currentTab === 'watchlater') {
+      undo();
+    } else if (currentTab === 'channels') {
+      undoChannelUnsubscribe();
+    }
+  } else if (e.key === 'o') {
+    // o: open in YouTube (vim-style)
+    e.preventDefault();
+    if (currentTab === 'channels') {
+      const channel = filteredChannels[focusedIndex];
+      if (channel) {
+        window.open(`https://www.youtube.com/channel/${channel.id}`, '_blank');
+      }
+    } else {
+      const video = filteredVideos[focusedIndex];
+      if (video) {
+        window.open(`https://www.youtube.com/watch?v=${video.id}`, '_blank');
+      }
+    }
+  } else if (e.key === 'y') {
+    // y: yank/copy URL to clipboard (vim-style)
+    e.preventDefault();
+    let url = '';
+    if (currentTab === 'channels') {
+      const channel = filteredChannels[focusedIndex];
+      if (channel) {
+        url = `https://www.youtube.com/channel/${channel.id}`;
+      }
+    } else {
+      const video = filteredVideos[focusedIndex];
+      if (video) {
+        url = `https://www.youtube.com/watch?v=${video.id}`;
+      }
+    }
+    if (url) {
+      navigator.clipboard.writeText(url).then(() => {
+        showToast('URL copied to clipboard', 'success');
+      }).catch(() => {
+        showToast('Failed to copy URL', 'error');
+      });
+    }
   }
 });
 
