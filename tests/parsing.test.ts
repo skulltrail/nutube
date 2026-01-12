@@ -445,6 +445,151 @@ describe('continuation token extraction', () => {
   });
 });
 
+describe('playlist parsing', () => {
+  // Re-implementation of findPlaylistsInObject for testing
+  function parsePlaylistLockupViewModel(obj: any): Playlist | null {
+    const lockup = obj.lockupViewModel;
+    if (!lockup) return null;
+
+    const contentId = lockup.contentId;
+    const metadata = lockup.metadata?.lockupMetadataViewModel;
+    const title = metadata?.title?.content;
+
+    if (!contentId || !title || contentId.startsWith('WL') || contentId === 'LL') {
+      return null;
+    }
+
+    const isPlaylist = lockup.contentType === 'LOCKUP_CONTENT_TYPE_PLAYLIST' ||
+                      obj.collectionThumbnailViewModel ||
+                      lockup.rendererContext?.commandContext?.onTap?.innertubeCommand?.browseEndpoint?.browseId?.startsWith('VL');
+
+    if (!isPlaylist) return null;
+
+    // Extract video count from metadata rows
+    let videoCount = 0;
+    const metadataRows = metadata?.metadata?.contentMetadataViewModel?.metadataRows || [];
+    for (const row of metadataRows) {
+      const parts = row.metadataParts || [];
+      for (const part of parts) {
+        const text = part.text?.content || '';
+        const videoMatch = text.match(/(\d+)\s*video/i);
+        if (videoMatch) {
+          videoCount = parseInt(videoMatch[1], 10);
+          break;
+        }
+      }
+      if (videoCount > 0) break;
+    }
+
+    return {
+      id: contentId,
+      title: title,
+      videoCount,
+    };
+  }
+
+  it('should extract video count from lockupViewModel metadata', () => {
+    const playlist = parsePlaylistLockupViewModel(mockPlaylistLockupViewModel);
+
+    expect(playlist).not.toBeNull();
+    expect(playlist?.id).toBe('PLlockup456');
+    expect(playlist?.title).toBe('Lockup Playlist');
+    expect(playlist?.videoCount).toBe(42);
+  });
+
+  it('should handle lockupViewModel without video count', () => {
+    const lockupWithoutCount = {
+      lockupViewModel: {
+        contentId: 'PLnocount789',
+        contentType: 'LOCKUP_CONTENT_TYPE_PLAYLIST',
+        metadata: {
+          lockupMetadataViewModel: {
+            title: {
+              content: 'Playlist Without Count',
+            },
+          },
+        },
+      },
+    };
+
+    const playlist = parsePlaylistLockupViewModel(lockupWithoutCount);
+
+    expect(playlist).not.toBeNull();
+    expect(playlist?.videoCount).toBe(0);
+  });
+
+  it('should handle singular "1 video" text', () => {
+    const lockupWithOneVideo = {
+      lockupViewModel: {
+        contentId: 'PLone123',
+        contentType: 'LOCKUP_CONTENT_TYPE_PLAYLIST',
+        metadata: {
+          lockupMetadataViewModel: {
+            title: {
+              content: 'Single Video Playlist',
+            },
+            metadata: {
+              contentMetadataViewModel: {
+                metadataRows: [
+                  {
+                    metadataParts: [
+                      { text: { content: '1 video' } },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const playlist = parsePlaylistLockupViewModel(lockupWithOneVideo);
+
+    expect(playlist).not.toBeNull();
+    expect(playlist?.videoCount).toBe(1);
+  });
+
+  it('should extract video count when text has prefix (e.g., "Public • 42 videos")', () => {
+    const lockupWithPrefix = {
+      lockupViewModel: {
+        contentId: 'PLprefix789',
+        contentType: 'LOCKUP_CONTENT_TYPE_PLAYLIST',
+        metadata: {
+          lockupMetadataViewModel: {
+            title: {
+              content: 'Playlist With Prefix',
+            },
+            metadata: {
+              contentMetadataViewModel: {
+                metadataRows: [
+                  {
+                    metadataParts: [
+                      { text: { content: 'Public • 42 videos' } },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const playlist = parsePlaylistLockupViewModel(lockupWithPrefix);
+
+    expect(playlist).not.toBeNull();
+    expect(playlist?.videoCount).toBe(42);
+  });
+
+  it('should parse gridPlaylistRenderer video count', () => {
+    const renderer = mockGridPlaylistRenderer.gridPlaylistRenderer;
+    const videoCount = parseInt(renderer.videoCount || '0', 10);
+
+    expect(videoCount).toBe(25);
+  });
+});
+
 describe('edge cases and error handling', () => {
   it('should handle null/undefined inputs gracefully', () => {
     expect(parseVideoItem(null)).toBeNull();

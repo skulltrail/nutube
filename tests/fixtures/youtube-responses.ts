@@ -242,6 +242,17 @@ export const mockPlaylistLockupViewModel = {
         title: {
           content: 'Lockup Playlist',
         },
+        metadata: {
+          contentMetadataViewModel: {
+            metadataRows: [
+              {
+                metadataParts: [
+                  { text: { content: '42 videos' } },
+                ],
+              },
+            ],
+          },
+        },
       },
     },
   },
