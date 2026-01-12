@@ -606,7 +606,11 @@ function renderModalPlaylists() {
     el.addEventListener('click', () => {
       const playlistId = el.dataset.playlistId;
       closeModal();
-      moveToPlaylist(playlistId);
+      if (currentTab === 'subscriptions') {
+        addToPlaylist(playlistId);
+      } else {
+        moveToPlaylist(playlistId);
+      }
     });
   });
 
@@ -1472,6 +1476,36 @@ async function moveToPlaylist(playlistId) {
   setStatus('Ready');
 }
 
+// Add to playlist (for subscriptions - doesn't remove from current view)
+async function addToPlaylist(playlistId) {
+  const targets = getTargetVideos();
+  if (targets.length === 0) return;
+
+  const playlist = playlists.find(p => p.id === playlistId);
+  setStatus(`Adding ${targets.length} video(s) to ${playlist?.title}...`);
+
+  let added = 0;
+  for (const video of targets) {
+    try {
+      const result = await sendMessage({
+        type: 'ADD_TO_PLAYLIST',
+        videoId: video.id,
+        playlistId,
+      });
+      if (result.success) {
+        added++;
+      }
+    } catch (e) {
+      console.error('Add to playlist failed:', e);
+    }
+  }
+
+  selectedIndices.clear();
+  renderVideos();
+  showToast(`Added ${added} video(s) to ${playlist?.title}`, added > 0 ? 'success' : 'error');
+  setStatus('Ready');
+}
+
 // Modal
 function openModal() {
   isModalOpen = true;
@@ -1714,7 +1748,12 @@ document.addEventListener('keydown', (e) => {
       renderModalPlaylists();
     } else if (e.key === 'Enter') {
       closeModal();
-      moveToPlaylist(sortedPlaylists[modalFocusedIndex]?.id);
+      const playlistId = sortedPlaylists[modalFocusedIndex]?.id;
+      if (currentTab === 'subscriptions') {
+        addToPlaylist(playlistId);
+      } else {
+        moveToPlaylist(playlistId);
+      }
     } else if (e.key >= '1' && e.key <= '9') {
       // Assign quick move number to focused playlist
       const num = e.key;
@@ -1897,17 +1936,24 @@ document.addEventListener('keydown', (e) => {
       moveToBottom();
     }
   } else if (e.key === 'm') {
-    if (currentTab === 'watchlater') {
+    if (currentTab === 'watchlater' || currentTab === 'subscriptions') {
       openModal();
     } else {
       showToast('Press w to add to Watch Later', 'info');
     }
   } else if (e.key >= '1' && e.key <= '9') {
-    // Use quick move assignment (watch later only)
+    // Use quick move/add assignment
     if (currentTab === 'watchlater') {
       const playlist = getPlaylistByQuickMove(e.key);
       if (playlist) {
         moveToPlaylist(playlist.id);
+      } else {
+        showToast(`No playlist assigned to ${e.key}. Press m to assign.`, 'info');
+      }
+    } else if (currentTab === 'subscriptions') {
+      const playlist = getPlaylistByQuickMove(e.key);
+      if (playlist) {
+        addToPlaylist(playlist.id);
       } else {
         showToast(`No playlist assigned to ${e.key}. Press m to assign.`, 'info');
       }
