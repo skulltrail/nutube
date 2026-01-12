@@ -53,6 +53,7 @@ const playlistList = document.getElementById('playlist-list');
 const loadingEl = document.getElementById('loading');
 const loadingText = document.getElementById('loading-text');
 const videoCountEl = document.getElementById('video-count');
+const videoCountLabelEl = document.getElementById('video-count-label');
 const selectedCountEl = document.getElementById('selected-count');
 const statusMessage = document.getElementById('status-message');
 const searchInput = document.getElementById('search-input');
@@ -472,6 +473,7 @@ function renderVideos() {
   `;
   }).join('');
 
+  videoCountLabelEl.textContent = 'Videos:';
   videoCountEl.textContent = videos.length;
   selectedCountEl.textContent = selectedIndices.size;
 
@@ -727,6 +729,7 @@ async function showChannelPreview(channel) {
   const nameEl = document.getElementById('channel-preview-name');
   const statsEl = document.getElementById('channel-preview-stats');
   const videosEl = document.getElementById('channel-preview-videos');
+  const similarEl = document.getElementById('channel-preview-similar');
 
   // Set channel info (using textContent for security)
   nameEl.textContent = channel.name;
@@ -736,46 +739,107 @@ async function showChannelPreview(channel) {
   // Banner - use a gradient if no banner available
   bannerEl.style.backgroundImage = '';
 
-  // Show loading state
+  // Show loading state for videos
   videosEl.textContent = '';
   const loadingDiv = document.createElement('div');
   loadingDiv.className = 'channel-no-videos';
   loadingDiv.textContent = 'Loading videos...';
   videosEl.appendChild(loadingDiv);
 
+  // Show loading state for similar channels
+  similarEl.textContent = '';
+  const similarLoadingDiv = document.createElement('div');
+  similarLoadingDiv.className = 'channel-no-videos';
+  similarLoadingDiv.textContent = 'Loading similar channels...';
+  similarEl.appendChild(similarLoadingDiv);
+
   modal.classList.add('visible');
 
-  // Fetch videos from the channel's profile
-  try {
-    const response = await sendMessage({ type: 'GET_CHANNEL_VIDEOS', channelId: channel.id });
-    if (response.success && response.data) {
-      currentChannelVideos = response.data;
-      channelVideoFocusIndex = 0;
+  // Fetch videos and similar channels in parallel
+  const [videosResponse, similarResponse] = await Promise.all([
+    sendMessage({ type: 'GET_CHANNEL_VIDEOS', channelId: channel.id }).catch(e => {
+      console.error('Error fetching channel videos:', e);
+      return { success: false, error: String(e) };
+    }),
+    sendMessage({ type: 'GET_CHANNEL_SUGGESTIONS', channelId: channel.id }).catch(e => {
+      console.error('Error fetching similar channels:', e);
+      return { success: false, error: String(e) };
+    }),
+  ]);
 
-      if (currentChannelVideos.length === 0) {
-        videosEl.textContent = '';
-        const noVideosDiv = document.createElement('div');
-        noVideosDiv.className = 'channel-no-videos';
-        noVideosDiv.textContent = 'No videos found';
-        videosEl.appendChild(noVideosDiv);
-      } else {
-        renderChannelVideos();
-      }
-    } else {
+  // Handle videos response
+  if (videosResponse.success && videosResponse.data) {
+    currentChannelVideos = videosResponse.data;
+    channelVideoFocusIndex = 0;
+
+    if (currentChannelVideos.length === 0) {
       videosEl.textContent = '';
-      const errorDiv = document.createElement('div');
-      errorDiv.className = 'channel-no-videos';
-      errorDiv.textContent = 'Failed to load videos';
-      videosEl.appendChild(errorDiv);
+      const noVideosDiv = document.createElement('div');
+      noVideosDiv.className = 'channel-no-videos';
+      noVideosDiv.textContent = 'No videos found';
+      videosEl.appendChild(noVideosDiv);
+    } else {
+      renderChannelVideos();
     }
-  } catch (e) {
-    console.error('Error fetching channel videos:', e);
+  } else {
     videosEl.textContent = '';
     const errorDiv = document.createElement('div');
     errorDiv.className = 'channel-no-videos';
-    errorDiv.textContent = 'Error loading videos';
+    errorDiv.textContent = 'Failed to load videos';
     videosEl.appendChild(errorDiv);
   }
+
+  // Handle similar channels response
+  if (similarResponse.success && similarResponse.data && similarResponse.data.length > 0) {
+    // Filter out channels we're already subscribed to
+    const filteredSimilar = similarResponse.data.filter(s => !channels.find(c => c.id === s.id));
+    renderSimilarChannelsInPreview(filteredSimilar);
+  } else {
+    similarEl.textContent = '';
+    const noSimilarDiv = document.createElement('div');
+    noSimilarDiv.className = 'channel-no-videos';
+    noSimilarDiv.textContent = 'No similar channels found';
+    similarEl.appendChild(noSimilarDiv);
+  }
+}
+
+// Render similar channels in the channel preview modal
+function renderSimilarChannelsInPreview(similarChannels) {
+  const similarEl = document.getElementById('channel-preview-similar');
+  similarEl.textContent = '';
+
+  if (similarChannels.length === 0) {
+    const noSimilarDiv = document.createElement('div');
+    noSimilarDiv.className = 'channel-no-videos';
+    noSimilarDiv.textContent = 'No similar channels found';
+    similarEl.appendChild(noSimilarDiv);
+    return;
+  }
+
+  similarChannels.forEach(channel => {
+    const item = document.createElement('div');
+    item.className = 'similar-channel-item';
+    item.dataset.channelId = channel.id;
+
+    const thumb = document.createElement('img');
+    thumb.className = 'similar-channel-thumb';
+    thumb.src = fixUrl(channel.thumbnail) || '';
+    thumb.alt = '';
+    thumb.loading = 'lazy';
+    item.appendChild(thumb);
+
+    const name = document.createElement('div');
+    name.className = 'similar-channel-name';
+    name.title = channel.name;
+    name.textContent = channel.name;
+    item.appendChild(name);
+
+    item.addEventListener('click', () => {
+      window.open(`https://www.youtube.com/channel/${channel.id}`, '_blank');
+    });
+
+    similarEl.appendChild(item);
+  });
 }
 
 function renderChannelVideos() {
@@ -907,6 +971,7 @@ function renderChannels() {
   `;
   }).join('');
 
+  videoCountLabelEl.textContent = 'Channels:';
   videoCountEl.textContent = channels.length;
   selectedCountEl.textContent = '0';
 

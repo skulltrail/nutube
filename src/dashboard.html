@@ -1078,6 +1078,64 @@
       padding: 16px 20px;
       overflow-x: auto;
       scroll-behavior: smooth;
+      min-height: 150px;
+    }
+
+    /* Section headers for channel preview */
+    .channel-preview-section {
+      padding: 0 20px;
+    }
+
+    .channel-preview-section h4 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-muted);
+      margin: 16px 0 8px;
+      font-weight: 600;
+    }
+
+    /* Similar channels in preview */
+    .channel-preview-similar {
+      display: flex;
+      gap: 12px;
+      padding: 0 20px 16px;
+      overflow-x: auto;
+      scroll-behavior: smooth;
+    }
+
+    .similar-channel-item {
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      width: 100px;
+      cursor: pointer;
+      padding: 8px;
+      border-radius: 4px;
+      transition: background 0.15s;
+    }
+
+    .similar-channel-item:hover {
+      background: var(--bg-hover);
+    }
+
+    .similar-channel-thumb {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      object-fit: cover;
+      background: var(--bg-tertiary);
+    }
+
+    .similar-channel-name {
+      font-size: 11px;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
     }
 
     .channel-video-item {
@@ -1148,7 +1206,7 @@
       </nav>
       <div class="stats">
         <div class="stat">
-          <span>Videos:</span>
+          <span id="video-count-label">Videos:</span>
           <span class="stat-value" id="video-count">-</span>
         </div>
         <div class="stat">
@@ -1293,11 +1351,19 @@
           </div>
         </div>
       </div>
+      <div class="channel-preview-section">
+        <h4>Latest Videos</h4>
+      </div>
       <div class="channel-preview-videos" id="channel-preview-videos"></div>
+      <div class="channel-preview-section">
+        <h4>Similar Channels</h4>
+      </div>
+      <div class="channel-preview-similar" id="channel-preview-similar"></div>
       <div class="preview-controls">
-        <span class="key">h/l</span> scroll videos
-        <span class="key">Enter/Space</span> preview video
-        <span class="key">q/Esc</span> close
+        <span class="key">h</span><span class="key">l</span> scroll
+        <span class="key">0</span><span class="key">$</span> first/last
+        <span class="key">↵</span> watch
+        <span class="key">q</span> close
       </div>
     </div>
   </div>
