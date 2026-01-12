@@ -1106,7 +1106,8 @@ async function getChannelSuggestions(channelId: string): Promise<Channel[]> {
   const suggestions: Channel[] = [];
 
   try {
-    // Fetch the channel's "channels" tab
+    // First, try fetching the channel's "channels" tab
+    // The param EghjaGFubmVscw%3D%3D decodes to a protobuf for the channels tab
     const data = await innertubeRequest('browse', {
       browseId: channelId,
       params: 'EghjaGFubmVscw%3D%3D', // Base64 encoded "channels" tab param
@@ -1114,6 +1115,19 @@ async function getChannelSuggestions(channelId: string): Promise<Channel[]> {
 
     // Find featured channels in the response
     findFeaturedChannels(data, suggestions);
+
+    console.log(`[NuTube] Found ${suggestions.length} channels from channels tab`);
+
+    // If no channels found, try the home tab as fallback (featured channels section)
+    if (suggestions.length === 0) {
+      console.log('[NuTube] No channels in channels tab, trying home tab...');
+      const homeData = await innertubeRequest('browse', {
+        browseId: channelId,
+        // No params = home tab
+      });
+      findFeaturedChannels(homeData, suggestions);
+      console.log(`[NuTube] Found ${suggestions.length} channels from home tab`);
+    }
   } catch (e) {
     console.warn('Could not fetch channel suggestions:', e);
   }
@@ -1184,7 +1198,18 @@ async function getChannelVideos(channelId: string): Promise<Video[]> {
     const continuation: { token: string | null } = { token: null };
     findVideosInChannelTab(data, videos, continuation);
 
-    console.log(`[NuTube] Fetched ${videos.length} videos from channel ${channelId}`);
+    console.log(`[NuTube] Fetched ${videos.length} videos from channel ${channelId} (videos tab)`);
+
+    // If no videos found with videos tab, try the home tab as fallback
+    if (videos.length === 0) {
+      console.log('[NuTube] No videos in videos tab, trying home tab...');
+      const homeData = await innertubeRequest('browse', {
+        browseId: channelId,
+        // No params = home tab
+      });
+      findVideosInChannelTab(homeData, videos, continuation);
+      console.log(`[NuTube] Fetched ${videos.length} videos from channel ${channelId} (home tab)`);
+    }
   } catch (e) {
     console.warn('Could not fetch channel videos:', e);
   }
@@ -1216,6 +1241,22 @@ function findVideosInChannelTab(obj: any, videos: Video[], continuation: { token
       if (video && !videos.find(v => v.id === video.id)) {
         videos.push(video);
       }
+    }
+  }
+
+  // Check for direct lockupViewModel (newer YouTube structure without wrapper)
+  if (obj.lockupViewModel?.contentType?.includes('VIDEO')) {
+    const video = parseLockupViewModel(obj.lockupViewModel);
+    if (video && !videos.find(v => v.id === video.id)) {
+      videos.push(video);
+    }
+  }
+
+  // Check for direct videoRenderer (without richItemRenderer wrapper)
+  if (obj.videoRenderer?.videoId) {
+    const video = parseSubscriptionVideoItem(obj);
+    if (video && !videos.find(v => v.id === video.id)) {
+      videos.push(video);
     }
   }
 
