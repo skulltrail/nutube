@@ -207,6 +207,91 @@ function parseSubscriptionVideoItem(item: any): Video | null {
   return null;
 }
 
+// Extract video count from playlist lockupViewModel
+function extractPlaylistVideoCount(lockup: any): number {
+  // Try multiple paths where video count might be stored
+
+  // Path 1: Look in contentImage overlays (similar to video duration)
+  const overlays = lockup.contentImage?.collectionThumbnailViewModel?.overlays ||
+                   lockup.contentImage?.thumbnailViewModel?.overlays ||
+                   [];
+
+  for (const overlay of overlays) {
+    // Check thumbnailOverlayBadgeViewModel
+    const badges = overlay.thumbnailOverlayBadgeViewModel?.thumbnailBadges || [];
+    for (const badge of badges) {
+      const text = badge.thumbnailBadgeViewModel?.text || '';
+      const match = text.match(/(\d+)\s*video/i);
+      if (match) {
+        return parseInt(match[1], 10);
+      }
+    }
+
+    // Check thumbnailBottomOverlayViewModel
+    const bottomBadges = overlay.thumbnailBottomOverlayViewModel?.badges || [];
+    for (const badge of bottomBadges) {
+      const text = badge.thumbnailBadgeViewModel?.text || '';
+      const match = text.match(/(\d+)\s*video/i);
+      if (match) {
+        return parseInt(match[1], 10);
+      }
+    }
+  }
+
+  // Path 2: Look in contentImage.collectionThumbnailViewModel.stackedThumbnails or similar
+  const collectionThumb = lockup.contentImage?.collectionThumbnailViewModel;
+  if (collectionThumb) {
+    // Sometimes video count is in accessibility text
+    const accessibilityText = collectionThumb.accessibility?.accessibilityData?.label || '';
+    const match = accessibilityText.match(/(\d+)\s*video/i);
+    if (match) {
+      return parseInt(match[1], 10);
+    }
+  }
+
+  // Path 3: Deep search through entire lockup for any "X videos" text
+  const videoCountFromDeepSearch = findVideoCountInObject(lockup);
+  if (videoCountFromDeepSearch > 0) {
+    return videoCountFromDeepSearch;
+  }
+
+  return 0;
+}
+
+// Recursively search object for video count text
+function findVideoCountInObject(obj: any, visited = new WeakSet()): number {
+  if (!obj || typeof obj !== 'object') return 0;
+  if (visited.has(obj)) return 0;
+  visited.add(obj);
+
+  // Check if this object has a text/content property with video count
+  for (const key of ['text', 'content', 'simpleText', 'label']) {
+    const value = obj[key];
+    if (typeof value === 'string') {
+      const match = value.match(/(\d+)\s*video/i);
+      if (match) {
+        console.log(`[NuTube] Found video count in ${key}:`, value);
+        return parseInt(match[1], 10);
+      }
+    }
+  }
+
+  // Recursively search
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const count = findVideoCountInObject(item, visited);
+      if (count > 0) return count;
+    }
+  } else {
+    for (const key of Object.keys(obj)) {
+      const count = findVideoCountInObject(obj[key], visited);
+      if (count > 0) return count;
+    }
+  }
+
+  return 0;
+}
+
 // Extract duration and progress from lockupViewModel overlay structure
 function extractDurationAndProgress(lockup: any): { duration: string; progressPercent: number; watched: boolean } {
   const result = { duration: '', progressPercent: 0, watched: false };
@@ -449,16 +534,61 @@ function findPlaylistsInObject(obj: any, playlists: Playlist[], visited = new We
     const metadata = lockup.metadata?.lockupMetadataViewModel;
     const title = metadata?.title?.content;
 
+    console.log('[NuTube] Found lockupViewModel:', {
+      contentId,
+      contentType: lockup.contentType,
+      title,
+      hasMetadata: !!metadata,
+      metadataKeys: metadata ? Object.keys(metadata) : [],
+    });
+
+    // Log contentImage and other fields to find where video counts are stored
+    if (lockup.contentType === 'LOCKUP_CONTENT_TYPE_PLAYLIST') {
+      console.log('[NuTube] Full playlist lockup:', JSON.stringify(lockup, null, 2).slice(0, 3000));
+    }
+
     if (contentId && title && !contentId.startsWith('WL') && contentId !== 'LL') {
       // Check if it's a playlist by looking at the contentType or by the thumbnail structure
       const isPlaylist = lockup.contentType === 'LOCKUP_CONTENT_TYPE_PLAYLIST' ||
                         obj.collectionThumbnailViewModel ||
                         lockup.rendererContext?.commandContext?.onTap?.innertubeCommand?.browseEndpoint?.browseId?.startsWith('VL');
+
+      console.log('[NuTube] isPlaylist check:', { isPlaylist, contentType: lockup.contentType });
+
       if (isPlaylist && !playlists.find(p => p.id === contentId)) {
+        // Log the full metadata structure to understand what we're working with
+        console.log('[NuTube] Playlist metadata structure:', JSON.stringify(metadata, null, 2));
+
+        // First try to extract video count from contentImage overlays (like video duration badges)
+        let videoCount = extractPlaylistVideoCount(lockup);
+        console.log('[NuTube] Video count from overlays:', videoCount);
+
+        // Fallback: Extract video count from metadata rows (format: "42 videos" or similar)
+        if (videoCount === 0) {
+          const metadataRows = metadata?.metadata?.contentMetadataViewModel?.metadataRows || [];
+          console.log('[NuTube] metadataRows:', JSON.stringify(metadataRows, null, 2));
+
+          for (const row of metadataRows) {
+            const parts = row.metadataParts || [];
+            for (const part of parts) {
+              const text = part.text?.content || '';
+              console.log('[NuTube] Checking text:', text);
+              // Match patterns like "42 videos", "1 video", "No videos"
+              const videoMatch = text.match(/(\d+)\s*video/i);
+              if (videoMatch) {
+                videoCount = parseInt(videoMatch[1], 10);
+                console.log('[NuTube] Found videoCount in metadata:', videoCount);
+                break;
+              }
+            }
+            if (videoCount > 0) break;
+          }
+        }
+
         playlists.push({
           id: contentId,
           title: title,
-          videoCount: 0,
+          videoCount,
         });
       }
     }
@@ -498,6 +628,9 @@ async function getUserPlaylists(): Promise<Playlist[]> {
     browseId: 'FElibrary',
   });
 
+  console.log('[NuTube] FElibrary response keys:', Object.keys(data || {}));
+  console.log('[NuTube] FElibrary full response:', JSON.stringify(data, null, 2).slice(0, 5000));
+
   // Use recursive search to find playlists in the response
   findPlaylistsInObject(data.contents, playlists);
 
@@ -527,7 +660,92 @@ async function getUserPlaylists(): Promise<Playlist[]> {
     console.warn('Could not fetch guide playlists:', e);
   }
 
+  // For playlists with videoCount = 0, try fetching individual playlist details
+  // to get accurate video counts
+  const playlistsWithMissingCounts = playlists.filter(p => p.videoCount === 0);
+  if (playlistsWithMissingCounts.length > 0) {
+    console.log('[NuTube] Fetching individual playlist details for', playlistsWithMissingCounts.length, 'playlists');
+
+    // Fetch in batches to avoid overwhelming the API
+    const batchSize = 3;
+    for (let i = 0; i < playlistsWithMissingCounts.length; i += batchSize) {
+      const batch = playlistsWithMissingCounts.slice(i, i + batchSize);
+      await Promise.all(batch.map(async (playlist) => {
+        try {
+          const playlistData = await innertubeRequest('browse', {
+            browseId: `VL${playlist.id}`,
+          });
+
+          // Extract video count from playlist detail response
+          const videoCount = extractVideoCountFromPlaylistDetails(playlistData);
+          if (videoCount > 0) {
+            playlist.videoCount = videoCount;
+            console.log('[NuTube] Got video count for', playlist.title, ':', videoCount);
+          }
+        } catch (e) {
+          console.warn('[NuTube] Failed to fetch playlist details for', playlist.id, e);
+        }
+      }));
+    }
+  }
+
   return playlists;
+}
+
+// Extract video count from individual playlist browse response
+function extractVideoCountFromPlaylistDetails(data: any): number {
+  // Try header -> playlistSidebarPrimaryInfoRenderer -> stats
+  const header = data?.header;
+
+  // Pattern 1: playlistHeaderRenderer (common for playlists)
+  const playlistHeader = header?.playlistHeaderRenderer;
+  if (playlistHeader) {
+    // Try stats array
+    const stats = playlistHeader.stats || [];
+    for (const stat of stats) {
+      const text = stat.runs?.[0]?.text || stat.simpleText || '';
+      const match = text.match(/(\d+)/);
+      if (match && text.toLowerCase().includes('video')) {
+        return parseInt(match[1], 10);
+      }
+      // Sometimes just the number is in runs, e.g., "42" followed by " videos"
+      if (match && stats.length > 0) {
+        const fullText = stats.map((s: any) =>
+          s.runs?.map((r: any) => r.text).join('') || s.simpleText || ''
+        ).join(' ');
+        const videoMatch = fullText.match(/(\d+)\s*video/i);
+        if (videoMatch) {
+          return parseInt(videoMatch[1], 10);
+        }
+      }
+    }
+
+    // Try numVideosText
+    const numVideosText = playlistHeader.numVideosText?.runs?.[0]?.text ||
+                          playlistHeader.numVideosText?.simpleText || '';
+    const numMatch = numVideosText.match(/(\d+)/);
+    if (numMatch) {
+      return parseInt(numMatch[1], 10);
+    }
+  }
+
+  // Pattern 2: Try sidebar
+  const sidebar = data?.sidebar?.playlistSidebarRenderer?.items || [];
+  for (const item of sidebar) {
+    const primaryInfo = item.playlistSidebarPrimaryInfoRenderer;
+    if (primaryInfo?.stats) {
+      for (const stat of primaryInfo.stats) {
+        const text = stat.runs?.map((r: any) => r.text).join('') || stat.simpleText || '';
+        const match = text.match(/(\d+)\s*video/i);
+        if (match) {
+          return parseInt(match[1], 10);
+        }
+      }
+    }
+  }
+
+  // Pattern 3: Deep search as fallback
+  return findVideoCountInObject(data);
 }
 
 // Remove video from Watch Later
