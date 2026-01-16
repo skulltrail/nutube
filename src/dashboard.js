@@ -305,7 +305,8 @@ function renderShortcuts() {
         shortcuts: [
           { keys: ['v'], desc: 'Visual Line (range)' },
           { keys: ['⌃v'], desc: 'Visual Block (toggle)' },
-          { keys: ['Space'], desc: 'Preview / toggle (⌃v)' },
+          { keys: ['Space'], desc: 'Open / select (⌃v)' },
+          { keys: ['⌃a'], desc: 'Select all' },
         ]
       },
       {
@@ -322,6 +323,7 @@ function renderShortcuts() {
         shortcuts: [
           { keys: ['o', '↵'], desc: 'Open' },
           { keys: ['y'], desc: 'Copy URL' },
+          { keys: ['r'], desc: 'Refresh' },
           { keys: ['Tab'], desc: 'Switch tab' },
           { keys: ['?'], desc: 'Help' },
         ]
@@ -331,7 +333,6 @@ function renderShortcuts() {
       {
         title: 'Actions',
         shortcuts: [
-          { keys: ['Space'], desc: 'Toggle Watch Later' },
           { keys: ['w'], desc: 'Add to Watch Later' },
           { keys: ['h'], desc: 'Hide video' },
           { keys: ['m'], desc: 'Add to playlist' },
@@ -344,6 +345,7 @@ function renderShortcuts() {
           { keys: ['v'], desc: 'Visual Line (range)' },
           { keys: ['⌃v'], desc: 'Visual Block (toggle)' },
           { keys: ['Space'], desc: 'Toggle WL / select (⌃v)' },
+          { keys: ['⌃a'], desc: 'Select all' },
         ]
       },
       {
@@ -360,6 +362,7 @@ function renderShortcuts() {
         shortcuts: [
           { keys: ['o', '↵'], desc: 'Open' },
           { keys: ['y'], desc: 'Copy URL' },
+          { keys: ['r'], desc: 'Refresh' },
           { keys: ['Tab'], desc: 'Switch tab' },
           { keys: ['?'], desc: 'Help' },
         ]
@@ -388,8 +391,8 @@ function renderShortcuts() {
         shortcuts: [
           { keys: ['h', 'l'], desc: 'Scroll videos' },
           { keys: ['0', '$'], desc: 'First/last' },
-          { keys: ['↵'], desc: 'Watch video' },
-          { keys: ['q'], desc: 'Close' },
+          { keys: ['↵', 'Space'], desc: 'Watch video' },
+          { keys: ['q', 'Esc'], desc: 'Close' },
         ]
       },
       {
@@ -397,6 +400,7 @@ function renderShortcuts() {
         shortcuts: [
           { keys: ['o', '↵'], desc: 'Open channel' },
           { keys: ['y'], desc: 'Copy URL' },
+          { keys: ['r'], desc: 'Refresh' },
           { keys: ['Tab'], desc: 'Switch tab' },
           { keys: ['?'], desc: 'Help' },
         ]
@@ -1966,7 +1970,7 @@ function renderHelpModal() {
     selectionShortcuts = [
       { keys: ['v'], desc: 'Visual Line (range select)' },
       { keys: ['⌃v'], desc: 'Visual Block (toggle select)' },
-      { keys: ['Space'], desc: 'Preview / select (in ⌃v)' },
+      { keys: ['Space'], desc: 'Open video / select (in ⌃v)' },
       { keys: ['⌃a'], desc: 'Select all' },
     ];
     actionsShortcuts = [
@@ -1982,6 +1986,7 @@ function renderHelpModal() {
       { keys: ['v'], desc: 'Visual Line (range select)' },
       { keys: ['⌃v'], desc: 'Visual Block (toggle select)' },
       { keys: ['Space'], desc: 'Toggle WL / select (in ⌃v)' },
+      { keys: ['⌃a'], desc: 'Select all' },
     ];
     actionsShortcuts = [
       { keys: ['w'], desc: 'Add to Watch Later' },
