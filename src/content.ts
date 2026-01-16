@@ -1,7 +1,59 @@
-// Content script for NuTube
-// This runs in the context of YouTube pages, allowing authenticated API requests
+/**
+ * NuTube Content Script
+ *
+ * This runs in the context of YouTube pages, allowing authenticated API requests
+ * using YouTube's InnerTube API.
+ *
+ * ARCHITECTURE NOTE:
+ * This content script runs in the YouTube page context, which allows it to:
+ * 1. Access YouTube's session cookies for authenticated API requests
+ * 2. Make InnerTube API calls that require the same origin
+ * 3. Parse various YouTube renderer formats (see YouTube API Format Notes below)
+ *
+ * YOUTUBE API FORMAT NOTES:
+ * YouTube's InnerTube API returns data in several different renderer formats
+ * depending on the context and YouTube's ongoing UI updates. We must handle:
+ *
+ * VIDEO RENDERERS:
+ * - playlistVideoRenderer: Used in Watch Later playlist (legacy format)
+ * - playlistPanelVideoRenderer: Alternative playlist video format
+ * - videoRenderer: Standard video item (subscriptions, search)
+ * - gridVideoRenderer: Grid layout videos (channel pages)
+ * - compactVideoRenderer: Compact list videos
+ * - lockupViewModel: Newer YouTube format (2024+) with nested structure
+ *   - contentId: video ID
+ *   - metadata.lockupMetadataViewModel: title, channel info
+ *   - contentImage.thumbnailViewModel.overlays: duration, progress
+ *
+ * CHANNEL RENDERERS:
+ * - gridChannelRenderer: Channel in grid layout (FEchannels)
+ * - channelRenderer: Standard channel item
+ * - lockupViewModel (contentType: LOCKUP_CONTENT_TYPE_CHANNEL): Newer format
+ *
+ * PLAYLIST RENDERERS:
+ * - gridPlaylistRenderer: Playlist in grid layout
+ * - playlistRenderer: Standard playlist item
+ * - lockupViewModel (contentType: LOCKUP_CONTENT_TYPE_PLAYLIST): Newer format
+ *
+ * The parsing functions use recursive search with cycle detection (WeakSet)
+ * to find these renderers within YouTube's deeply nested response structures.
+ */
 
 import { MessageType } from './types';
+
+// =============================================================================
+// CONSTANTS
+// =============================================================================
+
+/** Enable debug logging (set to false in production) */
+const DEBUG = false;
+
+/** Log a debug message (only when DEBUG is enabled) */
+function debugLog(...args: any[]): void {
+  if (DEBUG) {
+    console.log('[NuTube]', ...args);
+  }
+}
 
 interface Video {
   id: string;
@@ -113,7 +165,12 @@ async function innertubeRequest(endpoint: string, body: object): Promise<any> {
   return response.json();
 }
 
-// Parse video item from InnerTube response
+/**
+ * Parse a video item from Watch Later playlist response.
+ * Handles playlistVideoRenderer and playlistPanelVideoRenderer formats.
+ * @param item - Raw item from YouTube API response
+ * @returns Parsed Video object or null if not a valid video
+ */
 function parseVideoItem(item: any): Video | null {
   const renderer = item.playlistVideoRenderer || item.playlistPanelVideoRenderer;
   if (!renderer) return null;
@@ -176,7 +233,12 @@ async function getWatchLater(): Promise<Video[]> {
   return videos;
 }
 
-// Parse video from various YouTube renderer types
+/**
+ * Parse a video from subscription feed or search results.
+ * Handles videoRenderer, gridVideoRenderer, and compactVideoRenderer formats.
+ * @param item - Raw item from YouTube API response
+ * @returns Parsed Video object or null if not a valid video
+ */
 function parseSubscriptionVideoItem(item: any): Video | null {
   // Try to find videoRenderer in various locations
   const videoRenderer =
@@ -270,7 +332,7 @@ function findVideoCountInObject(obj: any, visited = new WeakSet()): number {
     if (typeof value === 'string') {
       const match = value.match(/(\d+)\s*video/i);
       if (match) {
-        console.log(`[NuTube] Found video count in ${key}:`, value);
+        debugLog(`Found video count in ${key}:`, value);
         return parseInt(match[1], 10);
       }
     }
@@ -343,7 +405,12 @@ function extractDurationAndProgress(lockup: any): { duration: string; progressPe
   return result;
 }
 
-// Parse video from lockupViewModel (newer YouTube format)
+/**
+ * Parse a video from YouTube's newer lockupViewModel format (2024+).
+ * This format has a different nested structure with contentId, metadata, and contentImage.
+ * @param lockup - lockupViewModel object from YouTube API
+ * @returns Parsed Video object or null if not a valid video
+ */
 function parseLockupViewModel(lockup: any): Video | null {
   if (!lockup?.contentId) return null;
 
@@ -393,7 +460,14 @@ function parseLockupViewModel(lockup: any): Video | null {
   };
 }
 
-// Helper to recursively find videos in subscription feed structure
+/**
+ * Recursively search for videos in YouTube's nested subscription feed structure.
+ * Uses WeakSet for cycle detection to prevent infinite loops.
+ * @param obj - Object to search within
+ * @param videos - Array to push found videos into
+ * @param continuation - Object to store continuation token for pagination
+ * @param visited - WeakSet for cycle detection
+ */
 function findVideosInSubscriptionFeed(obj: any, videos: Video[], continuation: { token: string | null }, visited = new WeakSet()): void {
   if (!obj || typeof obj !== 'object') return;
   if (visited.has(obj)) return;
@@ -463,7 +537,7 @@ async function getSubscriptionFeed(): Promise<Video[]> {
   // Store continuation for infinite scroll
   subscriptionContinuation = continuation.token;
 
-  console.log(`[NuTube] Initial subscription load: ${videos.length} videos, continuation: ${continuation.token ? 'present' : 'null'}`);
+  debugLog(`Initial subscription load: ${videos.length} videos, continuation: ${continuation.token ? 'present' : 'null'}`);
 
   return videos;
 }
@@ -474,14 +548,14 @@ let subscriptionContinuation: string | null = null;
 // Fetch more subscription videos (for infinite scroll)
 async function getMoreSubscriptions(): Promise<Video[]> {
   if (!subscriptionContinuation) {
-    console.log('[NuTube] getMoreSubscriptions: No continuation token available');
+    debugLog('getMoreSubscriptions: No continuation token available');
     return [];
   }
 
   const videos: Video[] = [];
   const continuation: { token: string | null } = { token: null };
 
-  console.log('[NuTube] getMoreSubscriptions: Fetching with continuation token');
+  debugLog('getMoreSubscriptions: Fetching with continuation token');
 
   const contData = await innertubeRequest('browse', {
     continuation: subscriptionContinuation,
@@ -489,12 +563,12 @@ async function getMoreSubscriptions(): Promise<Video[]> {
 
   // Log the structure of the continuation response to debug
   const topKeys = Object.keys(contData || {});
-  console.log('[NuTube] Continuation response top-level keys:', topKeys.join(', '));
+  debugLog('Continuation response top-level keys:', topKeys.join(', '));
 
   // Use the same recursive finder to handle all video formats including lockupViewModel
   findVideosInSubscriptionFeed(contData, videos, continuation);
 
-  console.log(`[NuTube] getMoreSubscriptions: Found ${videos.length} videos, next continuation: ${continuation.token ? 'present' : 'null'}`);
+  debugLog(`getMoreSubscriptions: Found ${videos.length} videos, next continuation: ${continuation.token ? 'present' : 'null'}`);
 
   subscriptionContinuation = continuation.token;
   return videos;
@@ -534,7 +608,7 @@ function findPlaylistsInObject(obj: any, playlists: Playlist[], visited = new We
     const metadata = lockup.metadata?.lockupMetadataViewModel;
     const title = metadata?.title?.content;
 
-    console.log('[NuTube] Found lockupViewModel:', {
+    debugLog('Found lockupViewModel:', {
       contentId,
       contentType: lockup.contentType,
       title,
@@ -542,42 +616,32 @@ function findPlaylistsInObject(obj: any, playlists: Playlist[], visited = new We
       metadataKeys: metadata ? Object.keys(metadata) : [],
     });
 
-    // Log contentImage and other fields to find where video counts are stored
-    if (lockup.contentType === 'LOCKUP_CONTENT_TYPE_PLAYLIST') {
-      console.log('[NuTube] Full playlist lockup:', JSON.stringify(lockup, null, 2).slice(0, 3000));
-    }
-
     if (contentId && title && !contentId.startsWith('WL') && contentId !== 'LL') {
       // Check if it's a playlist by looking at the contentType or by the thumbnail structure
       const isPlaylist = lockup.contentType === 'LOCKUP_CONTENT_TYPE_PLAYLIST' ||
                         obj.collectionThumbnailViewModel ||
                         lockup.rendererContext?.commandContext?.onTap?.innertubeCommand?.browseEndpoint?.browseId?.startsWith('VL');
 
-      console.log('[NuTube] isPlaylist check:', { isPlaylist, contentType: lockup.contentType });
+      debugLog('isPlaylist check:', { isPlaylist, contentType: lockup.contentType });
 
       if (isPlaylist && !playlists.find(p => p.id === contentId)) {
-        // Log the full metadata structure to understand what we're working with
-        console.log('[NuTube] Playlist metadata structure:', JSON.stringify(metadata, null, 2));
-
         // First try to extract video count from contentImage overlays (like video duration badges)
         let videoCount = extractPlaylistVideoCount(lockup);
-        console.log('[NuTube] Video count from overlays:', videoCount);
+        debugLog('Video count from overlays:', videoCount);
 
         // Fallback: Extract video count from metadata rows (format: "42 videos" or similar)
         if (videoCount === 0) {
           const metadataRows = metadata?.metadata?.contentMetadataViewModel?.metadataRows || [];
-          console.log('[NuTube] metadataRows:', JSON.stringify(metadataRows, null, 2));
 
           for (const row of metadataRows) {
             const parts = row.metadataParts || [];
             for (const part of parts) {
               const text = part.text?.content || '';
-              console.log('[NuTube] Checking text:', text);
               // Match patterns like "42 videos", "1 video", "No videos"
               const videoMatch = text.match(/(\d+)\s*video/i);
               if (videoMatch) {
                 videoCount = parseInt(videoMatch[1], 10);
-                console.log('[NuTube] Found videoCount in metadata:', videoCount);
+                debugLog('Found videoCount in metadata:', videoCount);
                 break;
               }
             }
@@ -628,8 +692,7 @@ async function getUserPlaylists(): Promise<Playlist[]> {
     browseId: 'FElibrary',
   });
 
-  console.log('[NuTube] FElibrary response keys:', Object.keys(data || {}));
-  console.log('[NuTube] FElibrary full response:', JSON.stringify(data, null, 2).slice(0, 5000));
+  debugLog('FElibrary response keys:', Object.keys(data || {}));
 
   // Use recursive search to find playlists in the response
   findPlaylistsInObject(data.contents, playlists);
@@ -664,7 +727,7 @@ async function getUserPlaylists(): Promise<Playlist[]> {
   // to get accurate video counts
   const playlistsWithMissingCounts = playlists.filter(p => p.videoCount === 0);
   if (playlistsWithMissingCounts.length > 0) {
-    console.log('[NuTube] Fetching individual playlist details for', playlistsWithMissingCounts.length, 'playlists');
+    debugLog('Fetching individual playlist details for', playlistsWithMissingCounts.length, 'playlists');
 
     // Fetch in batches to avoid overwhelming the API
     const batchSize = 3;
@@ -680,10 +743,10 @@ async function getUserPlaylists(): Promise<Playlist[]> {
           const videoCount = extractVideoCountFromPlaylistDetails(playlistData);
           if (videoCount > 0) {
             playlist.videoCount = videoCount;
-            console.log('[NuTube] Got video count for', playlist.title, ':', videoCount);
+            debugLog('Got video count for', playlist.title, ':', videoCount);
           }
         } catch (e) {
-          console.warn('[NuTube] Failed to fetch playlist details for', playlist.id, e);
+          debugLog('Failed to fetch playlist details for', playlist.id, e);
         }
       }));
     }
@@ -1116,17 +1179,17 @@ async function getChannelSuggestions(channelId: string): Promise<Channel[]> {
     // Find featured channels in the response
     findFeaturedChannels(data, suggestions);
 
-    console.log(`[NuTube] Found ${suggestions.length} channels from channels tab`);
+    debugLog(`Found ${suggestions.length} channels from channels tab`);
 
     // If no channels found, try the home tab as fallback (featured channels section)
     if (suggestions.length === 0) {
-      console.log('[NuTube] No channels in channels tab, trying home tab...');
+      debugLog('No channels in channels tab, trying home tab...');
       const homeData = await innertubeRequest('browse', {
         browseId: channelId,
         // No params = home tab
       });
       findFeaturedChannels(homeData, suggestions);
-      console.log(`[NuTube] Found ${suggestions.length} channels from home tab`);
+      debugLog(`Found ${suggestions.length} channels from home tab`);
     }
   } catch (e) {
     console.warn('Could not fetch channel suggestions:', e);
@@ -1198,17 +1261,17 @@ async function getChannelVideos(channelId: string): Promise<Video[]> {
     const continuation: { token: string | null } = { token: null };
     findVideosInChannelTab(data, videos, continuation);
 
-    console.log(`[NuTube] Fetched ${videos.length} videos from channel ${channelId} (videos tab)`);
+    debugLog(`Fetched ${videos.length} videos from channel ${channelId} (videos tab)`);
 
     // If no videos found with videos tab, try the home tab as fallback
     if (videos.length === 0) {
-      console.log('[NuTube] No videos in videos tab, trying home tab...');
+      debugLog('No videos in videos tab, trying home tab...');
       const homeData = await innertubeRequest('browse', {
         browseId: channelId,
         // No params = home tab
       });
       findVideosInChannelTab(homeData, videos, continuation);
-      console.log(`[NuTube] Fetched ${videos.length} videos from channel ${channelId} (home tab)`);
+      debugLog(`Fetched ${videos.length} videos from channel ${channelId} (home tab)`);
     }
   } catch (e) {
     console.warn('Could not fetch channel videos:', e);
