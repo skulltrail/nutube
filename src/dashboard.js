@@ -1,15 +1,122 @@
-// State
+/**
+ * NuTube Dashboard UI
+ *
+ * A vim-style keyboard-driven interface for managing YouTube Watch Later,
+ * Subscriptions, and Channels.
+ *
+ * KEYBOARD PHILOSOPHY:
+ * - j/k for navigation (vim-style)
+ * - v for Visual Line mode (range selection with j/k)
+ * - Ctrl+v for Visual Block mode (toggle selection with Space)
+ * - Escape to clear selection/search
+ * - Single-key actions: d=delete, m=move, y=yank
+ * - gg/G for jump to top/bottom
+ * - / for search
+ *
+ * STATE MANAGEMENT:
+ * - videos[]: Current tab's video list (points to watchLaterVideos or subscriptionVideos)
+ * - filteredVideos[]: Search-filtered subset of videos
+ * - selectedIndices: Set of selected video indices (supports multi-select)
+ * - focusedIndex: Currently focused item (cursor position)
+ * - undoStack[]: History for undo operations (per-video and per-channel)
+ *
+ * COMMUNICATION:
+ * Uses chrome.runtime.sendMessage() to communicate with the background worker,
+ * which relays messages to the content script running on YouTube.
+ * See types.ts for the message protocol.
+ *
+ * RENDERING:
+ * DOM is updated via innerHTML with template strings. The render functions
+ * (renderVideos, renderChannels, renderPlaylists) rebuild the entire list.
+ * The .focused and .selected classes indicate state.
+ */
+
+// =============================================================================
+// CONSTANTS
+// =============================================================================
+
+/** Maximum items in the undo stack for video operations */
+const MAX_UNDO = 50;
+
+/** Maximum items in the undo stack for channel operations */
+const MAX_CHANNEL_UNDO = 50;
+
+/** Debounce delay for infinite scroll loading (ms) */
+const LOAD_DEBOUNCE_MS = 500;
+
+/** Timeout for pending G key press for gg command (ms) */
+const PENDING_G_TIMEOUT_MS = 500;
+
+/** Duration to show toast notifications (ms) */
+const TOAST_DURATION_MS = 3000;
+
+/** Duration to show undo toast for channel unsubscribe (ms) */
+const UNDO_TOAST_DURATION_MS = 5000;
+
+/** Timeout for inline unsubscribe confirmation (ms) */
+const UNSUBSCRIBE_CONFIRM_TIMEOUT_MS = 2000;
+
+/** Distance from bottom to trigger infinite scroll load (px) */
+const INFINITE_SCROLL_THRESHOLD_PX = 500;
+
+/** Debounce delay for scroll event handler (ms) */
+const SCROLL_DEBOUNCE_MS = 100;
+
+/** Approximate height of a video item for page size calculation (px) */
+const VIDEO_ITEM_HEIGHT_PX = 80;
+
+/** Enable debug logging (set to false in production) */
+const DEBUG = false;
+
+/**
+ * Log a debug message (only when DEBUG is enabled)
+ * @param {...any} args - Arguments to log
+ */
+function debugLog(...args) {
+  if (DEBUG) {
+    console.log('[NuTube]', ...args);
+  }
+}
+
+/**
+ * Log a warning (always logged, for recoverable issues)
+ * @param {...any} args - Arguments to log
+ */
+function warnLog(...args) {
+  console.warn('[NuTube]', ...args);
+}
+
+/**
+ * Log an error (always logged, for failures)
+ * @param {...any} args - Arguments to log
+ */
+function errorLog(...args) {
+  console.error('[NuTube]', ...args);
+}
+
+// =============================================================================
+// STATE
+// =============================================================================
+
 let videos = [];
 let filteredVideos = [];
 let playlists = [];
 let selectedIndices = new Set();
 let focusedIndex = 0;
 let visualModeStart = null;
+let visualBlockMode = false; // true = block mode (V), false = line mode (v)
 let searchQuery = '';
 let modalFocusedIndex = 0;
 let isModalOpen = false;
 let isHelpOpen = false;
 let pendingG = false;
+let hiddenVideoIds = new Set();
+
+// Lookup Maps for O(1) access by ID
+/** @type {Map<string, object>} */
+let channelMap = new Map();
+/** @type {Map<string, object>} */
+let playlistMap = new Map();
 
 // Tab state
 let currentTab = 'watchlater'; // 'watchlater', 'subscriptions', or 'channels'
@@ -20,7 +127,6 @@ let filteredChannels = [];
 let isLoadingMore = false; // For infinite scroll
 let subscriptionsContinuationExhausted = false;
 let lastLoadTime = 0;
-const LOAD_DEBOUNCE_MS = 500;
 
 // Channels state
 let channelSuggestions = [];
@@ -36,16 +142,81 @@ let currentChannelVideos = [];
 // Inline unsubscribe confirmation state
 let pendingUnsubscribe = null; // { channelId, index, timeoutId }
 
+// Keyboard navigation mode state
+let isKeyboardNavActive = false;
+
 // Channel undo stack (separate from videos)
 const channelUndoStack = [];
-const MAX_CHANNEL_UNDO = 50;
 
 // Quick move assignments: { 1: "playlistId", 2: "playlistId", ... }
 let quickMoveAssignments = {};
 
 // Undo history
 const undoStack = [];
-const MAX_UNDO = 50;
+
+// =============================================================================
+// LOOKUP HELPERS
+// =============================================================================
+
+/**
+ * Rebuild the channel lookup map from the current channels array
+ */
+function rebuildChannelMap() {
+  channelMap = new Map(channels.map(c => [c.id, c]));
+}
+
+/**
+ * Rebuild the playlist lookup map from the current playlists array
+ */
+function rebuildPlaylistMap() {
+  playlistMap = new Map(playlists.map(p => [p.id, p]));
+}
+
+/**
+ * Get a channel by ID using O(1) Map lookup
+ * @param {string} channelId
+ * @returns {object|undefined}
+ */
+function getChannelById(channelId) {
+  return channelMap.get(channelId);
+}
+
+/**
+ * Get a playlist by ID using O(1) Map lookup
+ * @param {string} playlistId
+ * @returns {object|undefined}
+ */
+function getPlaylistById(playlistId) {
+  return playlistMap.get(playlistId);
+}
+
+
+// =============================================================================
+// KEYBOARD NAVIGATION MODE
+// =============================================================================
+
+/**
+ * Enable keyboard navigation mode - hides cursor and disables hover effects
+ * Called when user navigates via keyboard
+ */
+function enableKeyboardNavMode() {
+  if (isKeyboardNavActive) return;
+  isKeyboardNavActive = true;
+  document.body.classList.add('keyboard-nav-active');
+}
+
+/**
+ * Disable keyboard navigation mode - restores cursor and hover effects
+ * Called when user moves the mouse
+ */
+function disableKeyboardNavMode() {
+  if (!isKeyboardNavActive) return;
+  isKeyboardNavActive = false;
+  document.body.classList.remove('keyboard-nav-active');
+}
+
+// Listen for mouse movement to exit keyboard nav mode
+document.addEventListener('mousemove', disableKeyboardNavMode);
 
 // DOM elements
 const videoList = document.getElementById('video-list');
@@ -56,7 +227,9 @@ const videoCountEl = document.getElementById('video-count');
 const videoCountLabelEl = document.getElementById('video-count-label');
 const selectedCountEl = document.getElementById('selected-count');
 const statusMessage = document.getElementById('status-message');
+const modeIndicatorEl = document.getElementById('mode-indicator');
 const searchInput = document.getElementById('search-input');
+const searchContainer = document.querySelector('.search-container');
 const modalOverlay = document.getElementById('modal-overlay');
 const modalPlaylists = document.getElementById('modal-playlists');
 const toastContainer = document.getElementById('toast-container');
@@ -69,7 +242,6 @@ const subscriptionsCountEl = document.getElementById('subscriptions-count');
 const channelsCountEl = document.getElementById('channels-count');
 const suggestionsModal = document.getElementById('suggestions-modal');
 const suggestionsList = document.getElementById('suggestions-list');
-const suggestionsTitle = document.getElementById('suggestions-title');
 const confirmModal = document.getElementById('confirm-modal');
 const confirmCancel = document.getElementById('confirm-cancel');
 const confirmOk = document.getElementById('confirm-ok');
@@ -131,8 +303,9 @@ function renderShortcuts() {
       {
         title: 'Selection',
         shortcuts: [
-          { keys: ['v'], desc: 'Visual mode' },
-          { keys: ['Space'], desc: 'Preview' },
+          { keys: ['v'], desc: 'Visual Line (range)' },
+          { keys: ['⌃v'], desc: 'Visual Block (toggle)' },
+          { keys: ['Space'], desc: 'Preview / toggle (⌃v)' },
         ]
       },
       {
@@ -160,6 +333,7 @@ function renderShortcuts() {
         shortcuts: [
           { keys: ['Space'], desc: 'Toggle Watch Later' },
           { keys: ['w'], desc: 'Add to Watch Later' },
+          { keys: ['h'], desc: 'Hide video' },
           { keys: ['m'], desc: 'Add to playlist' },
           { keys: ['1-9'], desc: 'Quick add' },
         ]
@@ -167,7 +341,9 @@ function renderShortcuts() {
       {
         title: 'Selection',
         shortcuts: [
-          { keys: ['v'], desc: 'Visual mode' },
+          { keys: ['v'], desc: 'Visual Line (range)' },
+          { keys: ['⌃v'], desc: 'Visual Block (toggle)' },
+          { keys: ['Space'], desc: 'Toggle WL / select (⌃v)' },
         ]
       },
       {
@@ -273,6 +449,43 @@ async function saveQuickMoveAssignments() {
   });
 }
 
+async function loadHiddenVideos() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['hiddenVideoIds'], (result) => {
+      if (result.hiddenVideoIds) {
+        hiddenVideoIds = new Set(result.hiddenVideoIds);
+      }
+      resolve();
+    });
+  });
+}
+
+async function saveHiddenVideos() {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ hiddenVideoIds: Array.from(hiddenVideoIds) }, resolve);
+  });
+}
+
+// Update mode indicator in footer
+function updateMode() {
+  if (modeIndicatorEl) {
+    if (visualModeStart !== null) {
+      // Show VISUAL LINE or VISUAL BLOCK with selection count
+      const selCount = selectedIndices.size;
+      const modeName = visualBlockMode ? 'VISUAL BLOCK' : 'VISUAL LINE';
+      modeIndicatorEl.textContent = selCount > 1 ? `${modeName} (${selCount})` : modeName;
+      modeIndicatorEl.classList.add('visual');
+    } else if (selectedIndices.size > 0) {
+      // Show selection count even when not in visual mode (e.g., after Ctrl+Click)
+      modeIndicatorEl.textContent = `SELECT (${selectedIndices.size})`;
+      modeIndicatorEl.classList.add('visual');
+    } else {
+      modeIndicatorEl.textContent = 'NORMAL';
+      modeIndicatorEl.classList.remove('visual');
+    }
+  }
+}
+
 function assignQuickMove(number, playlistId) {
   // Remove any existing assignment for this number
   // Also remove this playlist from any other number
@@ -297,7 +510,7 @@ function getQuickMoveNumber(playlistId) {
 function getPlaylistByQuickMove(number) {
   const playlistId = quickMoveAssignments[number];
   if (playlistId) {
-    return playlists.find(p => p.id === playlistId);
+    return getPlaylistById(playlistId);
   }
   return null;
 }
@@ -308,7 +521,7 @@ function showToast(message, type = 'info') {
   toast.className = `toast ${type}`;
   toast.textContent = message;
   toastContainer.appendChild(toast);
-  setTimeout(() => toast.remove(), 3000);
+  setTimeout(() => toast.remove(), TOAST_DURATION_MS);
 }
 
 // Tab switching
@@ -319,8 +532,10 @@ function switchTab(tab) {
   selectedIndices.clear();
   focusedIndex = 0;
   visualModeStart = null;
+  visualBlockMode = false;
   searchQuery = '';
   searchInput.value = '';
+  searchContainer?.classList.remove('active');
 
   // Update tab UI
   tabWatchLater.classList.toggle('active', tab === 'watchlater');
@@ -361,7 +576,7 @@ async function addToWatchLater() {
   const targets = getTargetVideos();
   if (targets.length === 0) return;
 
-  setStatus(`Adding ${targets.length} video(s) to Watch Later...`);
+  setStatus(`Adding ${targets.length} video(s) to Watch Later...`, 'loading');
 
   let added = 0;
   for (const video of targets) {
@@ -379,17 +594,28 @@ async function addToWatchLater() {
         }
       }
     } catch (e) {
-      console.error('Add to WL failed:', e);
+      errorLog('Add to WL failed:', e);
     }
   }
 
+  // Exit visual mode after adding
+  visualModeStart = null;
+  visualBlockMode = false;
   selectedIndices.clear();
+  updateMode();
+
   renderVideos();
   showToast(`Added ${added} video(s) to Watch Later`, added > 0 ? 'success' : 'error');
   setStatus('Ready');
 }
 
-// Remove from Watch Later (for subscriptions tab - removes from WL list)
+/**
+ * Remove a video from Watch Later (used in subscriptions tab)
+ * Finds the video in the local Watch Later cache to get setVideoId,
+ * then sends remove request to YouTube.
+ * @param {object} video - The video object to remove
+ * @returns {Promise<boolean>} Whether removal was successful
+ */
 async function removeFromWatchLaterSub(video) {
   // Find the video in watchLaterVideos to get setVideoId
   const wlVideo = watchLaterVideos.find(v => v.id === video.id);
@@ -408,12 +634,15 @@ async function removeFromWatchLaterSub(video) {
       return true;
     }
   } catch (e) {
-    console.error('Remove from WL failed:', e);
+    errorLog('Remove from WL failed:', e);
   }
   return false;
 }
 
-// Toggle Watch Later status (for subscriptions tab)
+/**
+ * Toggle Watch Later status for the focused video in subscriptions tab.
+ * If video is in WL, removes it. If not, adds it.
+ */
 async function toggleWatchLater() {
   if (currentTab !== 'subscriptions') return;
 
@@ -423,12 +652,12 @@ async function toggleWatchLater() {
   const inWL = isInWatchLater(video.id);
 
   if (inWL) {
-    setStatus('Removing from Watch Later...');
+    setStatus('Removing from Watch Later...', 'loading');
     const success = await removeFromWatchLaterSub(video);
     renderVideos();
     showToast(success ? 'Removed from Watch Later' : 'Failed to remove', success ? 'success' : 'error');
   } else {
-    setStatus('Adding to Watch Later...');
+    setStatus('Adding to Watch Later...', 'loading');
     try {
       const result = await sendMessage({
         type: 'ADD_TO_WATCH_LATER',
@@ -445,14 +674,62 @@ async function toggleWatchLater() {
         showToast('Failed to add', 'error');
       }
     } catch (e) {
-      console.error('Add to WL failed:', e);
+      errorLog('Add to WL failed:', e);
       showToast('Failed to add', 'error');
     }
   }
   setStatus('Ready');
 }
 
-// Load more subscriptions (infinite scroll)
+/**
+ * Toggle hide status for selected/focused videos in subscriptions tab.
+ * Hidden videos are stored locally and filtered from view.
+ */
+async function toggleHideVideo() {
+  if (currentTab !== 'subscriptions') return;
+
+  const targets = getTargetVideos();
+  if (targets.length === 0) return;
+
+  let hiddenCount = 0;
+  let unhiddenCount = 0;
+
+  for (const video of targets) {
+    if (hiddenVideoIds.has(video.id)) {
+      hiddenVideoIds.delete(video.id);
+      unhiddenCount++;
+    } else {
+      hiddenVideoIds.add(video.id);
+      hiddenCount++;
+    }
+  }
+
+  await saveHiddenVideos();
+
+  // Exit visual mode after hiding
+  visualModeStart = null;
+  visualBlockMode = false;
+  selectedIndices.clear();
+  updateMode();
+
+  // Adjust focus to stay within bounds
+  focusedIndex = Math.min(focusedIndex, Math.max(0, filteredVideos.length - targets.length - 1));
+  renderVideos();
+
+  if (hiddenCount > 0 && unhiddenCount > 0) {
+    showToast(`Hidden ${hiddenCount}, unhidden ${unhiddenCount}`, 'success');
+  } else if (hiddenCount > 0) {
+    showToast(`Hidden ${hiddenCount} video(s)`, 'success');
+  } else {
+    showToast(`Unhidden ${unhiddenCount} video(s)`, 'success');
+  }
+}
+
+/**
+ * Load more subscription videos for infinite scroll.
+ * Uses continuation tokens from YouTube's InnerTube API.
+ * Debounced to prevent excessive API calls.
+ */
 async function loadMoreSubscriptions() {
   // Debounce and prevent concurrent loads
   const now = Date.now();
@@ -465,9 +742,9 @@ async function loadMoreSubscriptions() {
   setLoadMoreState('loading');
 
   try {
-    console.log('[NuTube] loadMoreSubscriptions called, current count:', subscriptionVideos.length);
+    debugLog('loadMoreSubscriptions called, current count:', subscriptionVideos.length);
     const result = await sendMessage({ type: 'GET_MORE_SUBSCRIPTIONS' });
-    console.log('[NuTube] loadMoreSubscriptions result:', result.success, 'videos:', result.data?.length || 0);
+    debugLog('loadMoreSubscriptions result:', result.success, 'videos:', result.data?.length || 0);
 
     if (result.success && result.data && result.data.length > 0) {
       // Add new videos, avoiding duplicates
@@ -478,7 +755,7 @@ async function loadMoreSubscriptions() {
         }
       }
       const newCount = subscriptionVideos.length - prevCount;
-      console.log('[NuTube] Added', newCount, 'new videos, total:', subscriptionVideos.length);
+      debugLog('Added', newCount, 'new videos, total:', subscriptionVideos.length);
 
       videos = subscriptionVideos;
       subscriptionsCountEl.textContent = subscriptionVideos.length;
@@ -489,15 +766,15 @@ async function loadMoreSubscriptions() {
 
       setLoadMoreState('hidden');
     } else if (result.success && (!result.data || result.data.length === 0)) {
-      console.log('[NuTube] No more videos to load (continuation exhausted)');
+      debugLog('No more videos to load (continuation exhausted)');
       subscriptionsContinuationExhausted = true;
       setLoadMoreState('exhausted');
     } else if (!result.success) {
-      console.warn('[NuTube] Load more failed:', result.error);
+      warnLog('Load more failed:', result.error);
       setLoadMoreState('error');
     }
   } catch (e) {
-    console.warn('[NuTube] Load more exception:', e);
+    warnLog('Load more exception:', e);
     setLoadMoreState('error');
   } finally {
     isLoadingMore = false;
@@ -521,10 +798,11 @@ function renderVideos() {
   const query = searchQuery.toLowerCase();
   filteredVideos = query
     ? videos.filter(v =>
-        v.title.toLowerCase().includes(query) ||
-        v.channel.toLowerCase().includes(query)
+        !hiddenVideoIds.has(v.id) && 
+        (v.title.toLowerCase().includes(query) ||
+        v.channel.toLowerCase().includes(query))
       )
-    : [...videos];
+    : videos.filter(v => !hiddenVideoIds.has(v.id));
 
   videoList.innerHTML = filteredVideos.map((video, index) => {
     const inWL = currentTab === 'subscriptions' && isInWatchLater(video.id);
@@ -543,6 +821,7 @@ function renderVideos() {
         <div class="video-channel">${escapeHtml(video.channel)}</div>
       </div>
       <div class="video-meta">
+        ${isWatched ? '<span class="badge-watched">Watched</span>' : ''}
         ${inWL ? '<span class="wl-check" title="In Watch Later">✓</span>' : ''}
         <span class="video-duration">${video.duration || '--:--'}</span>
       </div>
@@ -570,6 +849,7 @@ function renderVideos() {
       } else {
         focusedIndex = index;
       }
+      updateMode();
       renderVideos();
     });
 
@@ -839,11 +1119,11 @@ async function showChannelPreview(channel) {
   // Fetch videos and similar channels in parallel
   const [videosResponse, similarResponse] = await Promise.all([
     sendMessage({ type: 'GET_CHANNEL_VIDEOS', channelId: channel.id }).catch(e => {
-      console.error('Error fetching channel videos:', e);
+      warnLog('Error fetching channel videos:', e);
       return { success: false, error: String(e) };
     }),
     sendMessage({ type: 'GET_CHANNEL_SUGGESTIONS', channelId: channel.id }).catch(e => {
-      console.error('Error fetching similar channels:', e);
+      warnLog('Error fetching similar channels:', e);
       return { success: false, error: String(e) };
     }),
   ]);
@@ -873,7 +1153,7 @@ async function showChannelPreview(channel) {
   // Handle similar channels response
   if (similarResponse.success && similarResponse.data && similarResponse.data.length > 0) {
     // Filter out channels we're already subscribed to
-    const filteredSimilar = similarResponse.data.filter(s => !channels.find(c => c.id === s.id));
+    const filteredSimilar = similarResponse.data.filter(s => !getChannelById(s.id));
     renderSimilarChannelsInPreview(filteredSimilar);
   } else {
     similarEl.textContent = '';
@@ -1084,10 +1364,10 @@ function startUnsubscribeConfirm(channel, index) {
   // Cancel any existing pending confirmation
   cancelUnsubscribeConfirm();
 
-  // Set up new pending confirmation with 2-second timeout
+  // Set up new pending confirmation with timeout
   const timeoutId = setTimeout(() => {
     cancelUnsubscribeConfirm();
-  }, 2000);
+  }, UNSUBSCRIBE_CONFIRM_TIMEOUT_MS);
 
   pendingUnsubscribe = {
     channelId: channel.id,
@@ -1116,7 +1396,7 @@ async function executeUnsubscribe(channel) {
   const originalIndex = channels.findIndex(c => c.id === channel.id);
   const channelCopy = { ...channel };
 
-  setStatus(`Unsubscribing from ${channel.name}...`);
+  setStatus(`Unsubscribing from ${channel.name}...`, 'loading');
   try {
     const result = await sendMessage({ type: 'UNSUBSCRIBE', channelId: channel.id });
     if (result.success) {
@@ -1144,7 +1424,7 @@ async function executeUnsubscribe(channel) {
       showToast('Failed to unsubscribe', 'error');
     }
   } catch (e) {
-    console.error('Unsubscribe failed:', e);
+    errorLog('Unsubscribe failed:', e);
     showToast('Failed to unsubscribe', 'error');
   }
   setStatus('Ready');
@@ -1157,8 +1437,8 @@ function showChannelUndoToast(channel) {
   toast.innerHTML = `Unsubscribed from ${escapeHtml(channel.name)}. Press <span class="key" style="display:inline-block;min-width:18px;height:18px;padding:0 4px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:2px;font-size:10px;margin:0 2px;">z</span> to undo`;
   toastContainer.appendChild(toast);
 
-  // Remove after 5 seconds
-  setTimeout(() => toast.remove(), 5000);
+  // Remove after undo toast duration
+  setTimeout(() => toast.remove(), UNDO_TOAST_DURATION_MS);
 }
 
 // Undo last channel unsubscribe
@@ -1174,7 +1454,7 @@ async function undoChannelUnsubscribe() {
     return;
   }
 
-  setStatus(`Resubscribing to ${lastAction.channel.name}...`);
+  setStatus(`Resubscribing to ${lastAction.channel.name}...`, 'loading');
   try {
     const result = await sendMessage({ type: 'SUBSCRIBE', channelId: lastAction.channel.id });
     if (result.success) {
@@ -1191,7 +1471,7 @@ async function undoChannelUnsubscribe() {
       showToast('Failed to resubscribe', 'error');
     }
   } catch (e) {
-    console.error('Resubscribe failed:', e);
+    errorLog('Resubscribe failed:', e);
     channelUndoStack.push(lastAction);
     showToast('Failed to resubscribe', 'error');
   }
@@ -1209,29 +1489,6 @@ function closeConfirm() {
   isConfirmOpen = false;
   confirmModal.classList.remove('visible');
   confirmCallback = null;
-}
-
-// Show similar channels modal
-async function showSimilarChannels(channel) {
-  suggestionsTitle.textContent = `Similar to ${channel.name}`;
-  suggestionsList.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-  isSuggestionsOpen = true;
-  suggestionsFocusedIndex = 0;
-  suggestionsModal.classList.add('visible');
-
-  try {
-    const result = await sendMessage({ type: 'GET_CHANNEL_SUGGESTIONS', channelId: channel.id });
-    if (result.success && result.data.length > 0) {
-      // Filter out channels we're already subscribed to
-      channelSuggestions = result.data.filter(s => !channels.find(c => c.id === s.id));
-      renderSuggestions();
-    } else {
-      suggestionsList.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 20px;">No similar channels found</div>';
-    }
-  } catch (e) {
-    console.error('Get suggestions failed:', e);
-    suggestionsList.innerHTML = '<div style="text-align: center; color: var(--accent); padding: 20px;">Failed to load suggestions</div>';
-  }
 }
 
 // Render suggestions list
@@ -1279,15 +1536,16 @@ async function loadMoreChannels() {
     const result = await sendMessage({ type: 'GET_MORE_CHANNELS' });
     if (result.success && result.data.length > 0) {
       for (const channel of result.data) {
-        if (!channels.find(c => c.id === channel.id)) {
+        if (!getChannelById(channel.id)) {
           channels.push(channel);
         }
       }
+      rebuildChannelMap();
       channelsCountEl.textContent = channels.length;
       renderChannels();
     }
   } catch (e) {
-    console.warn('Load more channels failed:', e);
+    warnLog('Load more channels failed:', e);
   } finally {
     isLoadingMore = false;
   }
@@ -1334,7 +1592,7 @@ async function undo() {
   }
 
   const lastAction = undoStack.pop();
-  setStatus(`Undoing ${lastAction.action}...`);
+  setStatus(`Undoing ${lastAction.action}...`, 'loading');
 
   try {
     switch (lastAction.action) {
@@ -1352,7 +1610,7 @@ async function undo() {
               restored++;
             }
           } catch (e) {
-            console.error('Restore failed:', e);
+            errorLog('Restore failed:', e);
           }
         }
         // Restore local state
@@ -1377,7 +1635,7 @@ async function undo() {
               restored++;
             }
           } catch (e) {
-            console.error('Restore failed:', e);
+            errorLog('Restore failed:', e);
           }
         }
         // Restore local state
@@ -1402,7 +1660,7 @@ async function undo() {
         showToast('Cannot undo this action', 'error');
     }
   } catch (error) {
-    console.error('Undo error:', error);
+    errorLog('Undo error:', error);
     showToast('Undo failed', 'error');
   }
 
@@ -1417,39 +1675,48 @@ async function deleteVideos() {
   // Save for undo
   saveUndoState('delete', { videos: [...targets] });
 
-  setStatus(`Deleting ${targets.length} video(s)...`);
+  // Optimistically update UI immediately
+  const targetIds = new Set(targets.map(v => v.id));
+  videos = videos.filter(v => !targetIds.has(v.id));
 
-  let attempted = 0;
-  const errors = [];
-  for (const video of targets) {
-    try {
-      const result = await sendMessage({
-        type: 'REMOVE_FROM_WATCH_LATER',
-        videoId: video.id,
-        setVideoId: video.setVideoId,
-      });
-      attempted++;
-      // Update UI optimistically - YouTube often returns errors but still processes
-      videos = videos.filter(v => v.id !== video.id);
-      if (!result.success && result.error) {
-        errors.push(result.error);
-      }
-    } catch (e) {
-      console.error('Delete exception:', e);
-      errors.push(String(e));
-    }
-  }
-
+  // Exit visual mode after delete
+  visualModeStart = null;
+  visualBlockMode = false;
   selectedIndices.clear();
+  updateMode();
+
   focusedIndex = Math.min(focusedIndex, Math.max(0, videos.length - 1));
   renderVideos();
 
-  // Note: YouTube often returns 409 errors but still processes requests successfully
-  if (errors.length > 0 && !errors.every(e => e.includes('409'))) {
-    console.warn('Delete had non-409 errors:', errors);
-  }
-  showToast(`Deleted ${attempted} video(s)`, 'success');
-  setStatus('Ready');
+  // Show initial toast - user can continue immediately
+  showToast(`Deleting ${targets.length} video(s)...`);
+  setStatus(`Deleting ${targets.length} video(s)...`);
+
+  // Process API calls in background
+  Promise.all(
+    targets.map(video =>
+      sendMessage({
+        type: 'REMOVE_FROM_WATCH_LATER',
+        videoId: video.id,
+        setVideoId: video.setVideoId,
+      }).catch(e => {
+        errorLog('Delete exception:', e);
+        return { success: false, error: String(e) };
+      })
+    )
+  ).then(results => {
+    const errors = results
+      .filter(r => !r.success && r.error)
+      .map(r => r.error);
+    // Note: YouTube often returns 409 errors but still processes requests successfully
+    if (errors.length > 0 && !errors.every(e => e.includes('409'))) {
+      warnLog('Delete had non-409 errors:', errors);
+      showToast(`Deleted with ${errors.length} error(s)`, 'warning');
+    } else {
+      showToast(`Deleted ${targets.length} video(s)`, 'success');
+    }
+    setStatus('Ready');
+  });
 }
 
 async function moveToTop() {
@@ -1459,31 +1726,51 @@ async function moveToTop() {
   // Save for undo
   saveUndoState('move_to_top', { targets: [...targets] });
 
+  // Remember original position to keep cursor at next video
+  const originalIndex = focusedIndex;
+
+  // Optimistically update UI immediately - move targets to top in order
+  const targetIds = new Set(targets.map(v => v.id));
+  videos = videos.filter(v => !targetIds.has(v.id));
+  videos = [...targets, ...videos];
+
+  // Exit visual mode after move
+  visualModeStart = null;
+  visualBlockMode = false;
+  selectedIndices.clear();
+  updateMode();
+
+  // Keep cursor at same position (now pointing to next video), clamped to valid range
+  focusedIndex = Math.min(originalIndex, videos.length - 1);
+  renderVideos();
+
+  // Show initial toast - user can continue immediately
+  showToast(`Moving ${targets.length} video(s) to top...`);
   setStatus(`Moving ${targets.length} video(s) to top...`);
 
-  // Move in reverse order to maintain relative order
-  for (const video of [...targets].reverse()) {
-    try {
-      // Get the current first video's setVideoId (to move before it)
-      const firstVideo = videos.find(v => v.id !== video.id);
-      await sendMessage({
+  // Process API calls in background - move in reverse order to maintain relative order
+  const firstNonTargetVideo = videos.find(v => !targetIds.has(v.id));
+
+  Promise.all(
+    [...targets].reverse().map(video =>
+      sendMessage({
         type: 'MOVE_TO_TOP',
         setVideoId: video.setVideoId,
-        firstSetVideoId: firstVideo?.setVideoId,
-      });
-      // Update local list optimistically - YouTube often succeeds despite errors
-      videos = videos.filter(v => v.id !== video.id);
-      videos.unshift(video);
-    } catch (e) {
-      console.error('Move to top error:', e);
+        firstSetVideoId: firstNonTargetVideo?.setVideoId,
+      }).catch(e => {
+        errorLog('Move to top error:', e);
+        return { success: false, error: String(e) };
+      })
+    )
+  ).then(results => {
+    const errors = results.filter(r => r && !r.success && r.error);
+    if (errors.length > 0) {
+      showToast(`Move to top had ${errors.length} error(s)`, 'warning');
+    } else {
+      showToast('Moved to top', 'success');
     }
-  }
-
-  selectedIndices.clear();
-  focusedIndex = 0;
-  renderVideos();
-  showToast('Moved to top');
-  setStatus('Ready');
+    setStatus('Ready');
+  });
 }
 
 async function moveToBottom() {
@@ -1493,30 +1780,51 @@ async function moveToBottom() {
   // Save for undo
   saveUndoState('move_to_bottom', { targets: [...targets] });
 
+  // Remember original position to keep cursor at next video
+  const originalIndex = focusedIndex;
+
+  // Optimistically update UI immediately - move targets to bottom in order
+  const targetIds = new Set(targets.map(v => v.id));
+  videos = videos.filter(v => !targetIds.has(v.id));
+  videos = [...videos, ...targets];
+
+  // Exit visual mode after move
+  visualModeStart = null;
+  visualBlockMode = false;
+  selectedIndices.clear();
+  updateMode();
+
+  // Keep cursor at same position (now pointing to next video), clamped to valid range
+  focusedIndex = Math.min(originalIndex, videos.length - 1);
+  renderVideos();
+
+  // Show initial toast - user can continue immediately
+  showToast(`Moving ${targets.length} video(s) to bottom...`);
   setStatus(`Moving ${targets.length} video(s) to bottom...`);
 
-  for (const video of targets) {
-    try {
-      // Get the current last video's setVideoId (to move after it)
-      const lastVideo = videos.filter(v => v.id !== video.id).pop();
-      await sendMessage({
+  // Process API calls in background
+  const lastNonTargetVideo = videos.filter(v => !targetIds.has(v.id)).pop();
+
+  Promise.all(
+    targets.map(video =>
+      sendMessage({
         type: 'MOVE_TO_BOTTOM',
         setVideoId: video.setVideoId,
-        lastSetVideoId: lastVideo?.setVideoId,
-      });
-      // Update local list optimistically - YouTube often succeeds despite errors
-      videos = videos.filter(v => v.id !== video.id);
-      videos.push(video);
-    } catch (e) {
-      console.error('Move to bottom error:', e);
+        lastSetVideoId: lastNonTargetVideo?.setVideoId,
+      }).catch(e => {
+        errorLog('Move to bottom error:', e);
+        return { success: false, error: String(e) };
+      })
+    )
+  ).then(results => {
+    const errors = results.filter(r => r && !r.success && r.error);
+    if (errors.length > 0) {
+      showToast(`Move to bottom had ${errors.length} error(s)`, 'warning');
+    } else {
+      showToast('Moved to bottom', 'success');
     }
-  }
-
-  selectedIndices.clear();
-  focusedIndex = videos.length - 1;
-  renderVideos();
-  showToast('Moved to bottom');
-  setStatus('Ready');
+    setStatus('Ready');
+  });
 }
 
 async function moveToPlaylist(playlistId) {
@@ -1524,33 +1832,48 @@ async function moveToPlaylist(playlistId) {
   if (targets.length === 0) return;
 
   // Save for undo
-  const playlist = playlists.find(p => p.id === playlistId);
+  const playlist = getPlaylistById(playlistId);
   saveUndoState('move_to_playlist', { videos: [...targets], playlistId, playlistTitle: playlist?.title });
 
+  // Optimistically update UI immediately
+  const targetIds = new Set(targets.map(v => v.id));
+  videos = videos.filter(v => !targetIds.has(v.id));
+
+  // Exit visual mode after move
+  visualModeStart = null;
+  visualBlockMode = false;
+  selectedIndices.clear();
+  updateMode();
+
+  focusedIndex = Math.min(focusedIndex, Math.max(0, videos.length - 1));
+  renderVideos();
+
+  // Show initial toast - user can continue immediately
+  showToast(`Moving ${targets.length} video(s) to ${playlist?.title}...`);
   setStatus(`Moving ${targets.length} video(s) to ${playlist?.title}...`);
 
-  let attempted = 0;
-  for (const video of targets) {
-    try {
-      await sendMessage({
+  // Process API calls in background
+  Promise.all(
+    targets.map(video =>
+      sendMessage({
         type: 'MOVE_TO_PLAYLIST',
         videoId: video.id,
         setVideoId: video.setVideoId,
         playlistId,
-      });
-      attempted++;
-      // Update UI optimistically
-      videos = videos.filter(v => v.id !== video.id);
-    } catch (e) {
-      console.error('Move failed:', e);
+      }).catch(e => {
+        errorLog('Move failed:', e);
+        return { success: false, error: String(e) };
+      })
+    )
+  ).then(results => {
+    const errors = results.filter(r => r && !r.success && r.error);
+    if (errors.length > 0) {
+      showToast(`Move had ${errors.length} error(s)`, 'warning');
+    } else {
+      showToast(`Moved ${targets.length} to ${playlist?.title}`, 'success');
     }
-  }
-
-  selectedIndices.clear();
-  focusedIndex = Math.min(focusedIndex, Math.max(0, videos.length - 1));
-  renderVideos();
-  showToast(`Moved ${attempted} to ${playlist?.title}`, 'success');
-  setStatus('Ready');
+    setStatus('Ready');
+  });
 }
 
 // Add to playlist (for subscriptions - doesn't remove from current view)
@@ -1558,7 +1881,7 @@ async function addToPlaylist(playlistId) {
   const targets = getTargetVideos();
   if (targets.length === 0) return;
 
-  const playlist = playlists.find(p => p.id === playlistId);
+  const playlist = getPlaylistById(playlistId);
   setStatus(`Adding ${targets.length} video(s) to ${playlist?.title}...`);
 
   let added = 0;
@@ -1573,11 +1896,16 @@ async function addToPlaylist(playlistId) {
         added++;
       }
     } catch (e) {
-      console.error('Add to playlist failed:', e);
+      errorLog('Add to playlist failed:', e);
     }
   }
 
+  // Exit visual mode after adding
+  visualModeStart = null;
+  visualBlockMode = false;
   selectedIndices.clear();
+  updateMode();
+
   renderVideos();
   showToast(`Added ${added} video(s) to ${playlist?.title}`, added > 0 ? 'success' : 'error');
   setStatus('Ready');
@@ -1627,8 +1955,9 @@ function renderHelpModal() {
   if (currentTab === 'watchlater') {
     tabTitle = 'Watch Later';
     selectionShortcuts = [
-      { keys: ['v'], desc: 'Visual mode (range select)' },
-      { keys: ['Space'], desc: 'Preview video' },
+      { keys: ['v'], desc: 'Visual Line (range select)' },
+      { keys: ['⌃v'], desc: 'Visual Block (toggle select)' },
+      { keys: ['Space'], desc: 'Preview / select (in ⌃v)' },
       { keys: ['⌃a'], desc: 'Select all' },
     ];
     actionsShortcuts = [
@@ -1641,11 +1970,13 @@ function renderHelpModal() {
   } else if (currentTab === 'subscriptions') {
     tabTitle = 'Subscriptions';
     selectionShortcuts = [
-      { keys: ['v'], desc: 'Visual mode (range select)' },
-      { keys: ['Space'], desc: 'Toggle Watch Later' },
+      { keys: ['v'], desc: 'Visual Line (range select)' },
+      { keys: ['⌃v'], desc: 'Visual Block (toggle select)' },
+      { keys: ['Space'], desc: 'Toggle WL / select (in ⌃v)' },
     ];
     actionsShortcuts = [
       { keys: ['w'], desc: 'Add to Watch Later' },
+      { keys: ['h'], desc: 'Hide video(s)' },
       { keys: ['m'], desc: 'Add to playlist' },
       { keys: ['1-9'], desc: 'Quick add to playlist' },
     ];
@@ -1730,15 +2061,19 @@ function closeHelp() {
   helpModal.classList.remove('visible');
 }
 
-// Update visual selection
+// Update visual selection (Visual Line mode only - extends selection as range)
 function updateVisualSelection() {
   if (visualModeStart === null) return;
+  // Never update range selection in Visual Block mode
+  if (visualBlockMode) return;
+
   selectedIndices.clear();
   const start = Math.min(visualModeStart, focusedIndex);
   const end = Math.max(visualModeStart, focusedIndex);
   for (let i = start; i <= end; i++) {
     selectedIndices.add(i);
   }
+  updateMode(); // Update mode indicator with current selection count
 }
 
 // Keyboard handling
@@ -1749,6 +2084,7 @@ document.addEventListener('keydown', (e) => {
       searchInput.blur();
       searchInput.value = '';
       searchQuery = '';
+      searchContainer?.classList.remove('active');
       if (currentTab === 'channels') {
         renderChannels();
       } else {
@@ -1770,20 +2106,24 @@ document.addEventListener('keydown', (e) => {
         break;
       case 'h':
       case 'ArrowLeft':
+        enableKeyboardNavMode();
         scrollChannelVideos('left');
         break;
       case 'l':
       case 'ArrowRight':
+        enableKeyboardNavMode();
         scrollChannelVideos('right');
         break;
       case '^':
       case '0':
         // Jump to first video (vim: beginning of line)
+        enableKeyboardNavMode();
         channelVideoFocusIndex = 0;
         renderChannelVideos();
         break;
       case '$':
         // Jump to last video (vim: end of line)
+        enableKeyboardNavMode();
         channelVideoFocusIndex = Math.max(0, currentChannelVideos.length - 1);
         renderChannelVideos();
         break;
@@ -1822,9 +2162,11 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closeSuggestions();
     } else if (e.key === 'j' || e.key === 'ArrowDown') {
+      enableKeyboardNavMode();
       suggestionsFocusedIndex = Math.min(suggestionsFocusedIndex + 1, channelSuggestions.length - 1);
       renderSuggestions();
     } else if (e.key === 'k' || e.key === 'ArrowUp') {
+      enableKeyboardNavMode();
       suggestionsFocusedIndex = Math.max(suggestionsFocusedIndex - 1, 0);
       renderSuggestions();
     } else if (e.key === 'Enter') {
@@ -1843,9 +2185,11 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closeModal();
     } else if (e.key === 'j' || e.key === 'ArrowDown') {
+      enableKeyboardNavMode();
       modalFocusedIndex = Math.min(modalFocusedIndex + 1, sortedPlaylists.length - 1);
       renderModalPlaylists();
     } else if (e.key === 'k' || e.key === 'ArrowUp') {
+      enableKeyboardNavMode();
       modalFocusedIndex = Math.max(modalFocusedIndex - 1, 0);
       renderModalPlaylists();
     } else if (e.key === 'Enter') {
@@ -1887,9 +2231,11 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'g' && !e.ctrlKey && !e.metaKey) {
     if (pendingG) {
       // gg - go to top
+      enableKeyboardNavMode();
       focusedIndex = 0;
       selectedIndices.clear();
       visualModeStart = null;
+      visualBlockMode = false;
       if (currentTab === 'channels') {
         renderChannels();
       } else {
@@ -1898,7 +2244,7 @@ document.addEventListener('keydown', (e) => {
       pendingG = false;
     } else {
       pendingG = true;
-      setTimeout(() => { pendingG = false; }, 500);
+      setTimeout(() => { pendingG = false; }, PENDING_G_TIMEOUT_MS);
     }
     return;
   }
@@ -1924,8 +2270,11 @@ document.addEventListener('keydown', (e) => {
 
     selectedIndices.clear();
     visualModeStart = null;
+    visualBlockMode = false;
     searchQuery = '';
     searchInput.value = '';
+    searchContainer?.classList.remove('active');
+    updateMode();
     if (currentTab === 'channels') {
       renderChannels();
     } else {
@@ -1933,16 +2282,18 @@ document.addEventListener('keydown', (e) => {
     }
   } else if (e.key === 'j' || e.key === 'ArrowDown') {
     e.preventDefault();
+    enableKeyboardNavMode();
     // Cancel pending unsubscribe confirmation on navigation
     if (pendingUnsubscribe) cancelUnsubscribeConfirm();
 
     const maxIndex = currentTab === 'channels' ? filteredChannels.length - 1 : filteredVideos.length - 1;
-    if (visualModeStart !== null && currentTab !== 'channels') {
-      focusedIndex = Math.min(focusedIndex + 1, maxIndex);
+    focusedIndex = Math.min(focusedIndex + 1, maxIndex);
+
+    // Only extend selection in Visual Line mode (not Visual Block)
+    if (visualModeStart !== null && !visualBlockMode && currentTab !== 'channels') {
       updateVisualSelection();
-    } else {
-      focusedIndex = Math.min(focusedIndex + 1, maxIndex);
     }
+
     if (currentTab === 'channels') {
       renderChannels();
     } else {
@@ -1950,26 +2301,46 @@ document.addEventListener('keydown', (e) => {
     }
   } else if (e.key === 'k' || e.key === 'ArrowUp') {
     e.preventDefault();
+    enableKeyboardNavMode();
     // Cancel pending unsubscribe confirmation on navigation
     if (pendingUnsubscribe) cancelUnsubscribeConfirm();
 
-    if (visualModeStart !== null && currentTab !== 'channels') {
-      focusedIndex = Math.max(focusedIndex - 1, 0);
+    focusedIndex = Math.max(focusedIndex - 1, 0);
+
+    // Only extend selection in Visual Line mode (not Visual Block)
+    if (visualModeStart !== null && !visualBlockMode && currentTab !== 'channels') {
       updateVisualSelection();
-    } else {
-      focusedIndex = Math.max(focusedIndex - 1, 0);
     }
+
     if (currentTab === 'channels') {
       renderChannels();
     } else {
       renderVideos();
     }
-  } else if (e.key === 'G') {
-    // Go to bottom
+  } else if (e.key === 'v' && e.ctrlKey) {
+    // Visual Block mode (Ctrl+V) - non-consecutive multi-select with Space toggle
+    e.preventDefault(); // Prevent paste
+    if (currentTab === 'channels') return;
+    if (visualModeStart === null) {
+      visualModeStart = focusedIndex;
+      visualBlockMode = true;
+      selectedIndices.clear();
+      selectedIndices.add(focusedIndex);
+    } else {
+      visualModeStart = null;
+      visualBlockMode = false;
+    }
+    updateMode();
+    renderVideos();
+    setStatus(visualModeStart !== null ? 'Visual Block: Space toggle, j/k move, Esc exit' : 'Ready');
+  } else if (e.key === 'G' && !e.shiftKey) {
+    // Go to bottom (plain G without shift)
+    enableKeyboardNavMode();
     const maxIndex = currentTab === 'channels' ? filteredChannels.length - 1 : filteredVideos.length - 1;
     focusedIndex = maxIndex;
     selectedIndices.clear();
     visualModeStart = null;
+    visualBlockMode = false;
     if (currentTab === 'channels') {
       renderChannels();
     } else {
@@ -1978,9 +2349,10 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'd' && e.ctrlKey) {
     // Ctrl+d: half page down (vim-style)
     e.preventDefault();
+    enableKeyboardNavMode();
     if (pendingUnsubscribe) cancelUnsubscribeConfirm();
     const maxIndex = currentTab === 'channels' ? filteredChannels.length - 1 : filteredVideos.length - 1;
-    const pageSize = Math.floor(window.innerHeight / 80 / 2); // ~half visible items
+    const pageSize = Math.floor(window.innerHeight / VIDEO_ITEM_HEIGHT_PX / 2); // ~half visible items
     focusedIndex = Math.min(focusedIndex + pageSize, maxIndex);
     if (currentTab === 'channels') {
       renderChannels();
@@ -1990,8 +2362,9 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'u' && e.ctrlKey) {
     // Ctrl+u: half page up (vim-style)
     e.preventDefault();
+    enableKeyboardNavMode();
     if (pendingUnsubscribe) cancelUnsubscribeConfirm();
-    const pageSize = Math.floor(window.innerHeight / 80 / 2);
+    const pageSize = Math.floor(window.innerHeight / VIDEO_ITEM_HEIGHT_PX / 2);
     focusedIndex = Math.max(focusedIndex - pageSize, 0);
     if (currentTab === 'channels') {
       renderChannels();
@@ -2000,7 +2373,11 @@ document.addEventListener('keydown', (e) => {
     }
   } else if (e.key === ' ') {
     e.preventDefault();
-    if (currentTab === 'subscriptions') {
+    // In Visual Block mode: toggle selection for non-consecutive multi-select
+    if (visualModeStart !== null && visualBlockMode && currentTab !== 'channels') {
+      toggleSelection(focusedIndex);
+      renderVideos();
+    } else if (currentTab === 'subscriptions') {
       // Toggle Watch Later status for focused video
       toggleWatchLater();
     } else if (currentTab === 'channels') {
@@ -2020,18 +2397,26 @@ document.addEventListener('keydown', (e) => {
         showToast('No video selected', 'info');
       }
     }
-  } else if (e.key === 'v') {
-    // Visual mode (not for channels)
+  } else if (e.key === 'v' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    // Visual Line mode (not for channels) - range selection with j/k
     if (currentTab === 'channels') return;
     if (visualModeStart === null) {
       visualModeStart = focusedIndex;
+      visualBlockMode = false;
       selectedIndices.clear();
       selectedIndices.add(focusedIndex);
     } else {
       visualModeStart = null;
+      visualBlockMode = false;
     }
+    updateMode();
     renderVideos();
-    setStatus(visualModeStart !== null ? 'Visual mode - use j/k to select range' : 'Ready');
+    setStatus(visualModeStart !== null ? 'Visual Line: j/k extend range, Esc exit' : 'Ready');
+  } else if (e.key === 'h') {
+    // Hide video(s)
+    if (currentTab === 'subscriptions') {
+      toggleHideVideo();
+    }
   } else if (e.key === 'Tab') {
     // Cycle through tabs (SHIFT+TAB goes backwards)
     e.preventDefault();
@@ -2180,6 +2565,14 @@ searchInput.addEventListener('input', (e) => {
   searchQuery = e.target.value;
   focusedIndex = 0;
   selectedIndices.clear();
+
+  // Update visual indicator for active search
+  if (searchQuery) {
+    searchContainer?.classList.add('active');
+  } else {
+    searchContainer?.classList.remove('active');
+  }
+
   if (currentTab === 'channels') {
     renderChannels();
   } else {
@@ -2218,6 +2611,7 @@ async function loadData() {
 
       if (playlistsResult.success) {
         playlists = playlistsResult.data;
+        rebuildPlaylistMap();
         renderPlaylists();
       }
     } else {
@@ -2239,7 +2633,7 @@ async function loadData() {
     setStatus('Ready');
     showToast(`Loaded ${videos.length} videos`, 'success');
   } catch (error) {
-    console.error('Load error:', error);
+    errorLog('Load error:', error);
     setStatus(error.message, 'error');
     showLoadError(error.message);
   } finally {
@@ -2270,7 +2664,7 @@ async function loadAllData() {
   loadingEl.style.display = 'flex';
   videoList.innerHTML = '';
   loadingText.textContent = 'Loading...';
-  setStatus('Loading...');
+  setStatus('Loading...', 'loading');
 
   try {
     // Load quick move assignments and all data in parallel
@@ -2280,6 +2674,7 @@ async function loadAllData() {
       sendMessage({ type: 'GET_PLAYLISTS' }),
       sendMessage({ type: 'GET_CHANNELS' }),
       loadQuickMoveAssignments(),
+      loadHiddenVideos(),
     ]);
 
     if (wlResult.success) {
@@ -2296,11 +2691,13 @@ async function loadAllData() {
 
     if (playlistsResult.success) {
       playlists = playlistsResult.data;
+      rebuildPlaylistMap();
       renderPlaylists();
     }
 
     if (channelsResult.success) {
       channels = channelsResult.data;
+      rebuildChannelMap();
       channelsCountEl.textContent = channels.length;
     }
 
@@ -2321,7 +2718,7 @@ async function loadAllData() {
     setStatus('Ready');
     showToast(`Loaded ${watchLaterVideos.length} WL, ${subscriptionVideos.length} Subs, ${channels.length} Channels`, 'success');
   } catch (error) {
-    console.error('Load error:', error);
+    errorLog('Load error:', error);
     setStatus(error.message, 'error');
     showLoadError(error.message);
   } finally {
@@ -2356,15 +2753,15 @@ videoListContainerEl.addEventListener('scroll', () => {
 
   // Debounced scroll handler
   scrollDebounceTimer = setTimeout(() => {
-    // Load more when user scrolls within 500px of bottom (increased from 200px)
-    if (distanceFromBottom < 500) {
+    // Load more when user scrolls near bottom
+    if (distanceFromBottom < INFINITE_SCROLL_THRESHOLD_PX) {
       if (currentTab === 'subscriptions') {
         loadMoreSubscriptions();
       } else if (currentTab === 'channels') {
         loadMoreChannels();
       }
     }
-  }, 100);
+  }, SCROLL_DEBOUNCE_MS);
 });
 
 // Channel preview modal click-to-close handler
