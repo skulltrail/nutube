@@ -1,3 +1,5 @@
+*[Cc][Ll][Aa][Uu][Dd][Ee]*
+*[Gg][Ee][Mm][Ii][Nn][Ii]*
 node_modules/
 *.log
 .DS_Store
@@ -6,3 +8,7 @@ node_modules/
 .playwright-mcp/
 playwright-report/
 test-results/
+
+# Build artifacts
+coverage/
+dist/
