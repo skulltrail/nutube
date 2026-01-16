@@ -855,7 +855,10 @@ function renderVideos() {
 
     el.addEventListener('dblclick', () => {
       const video = filteredVideos[parseInt(el.dataset.index)];
-      window.open(`https://www.youtube.com/watch?v=${video.id}`, '_blank');
+      const url = currentTab === 'watchlater'
+        ? getWatchLaterVideoUrl(video)
+        : `https://www.youtube.com/watch?v=${video.id}`;
+      window.open(url, '_blank');
     });
   });
 
@@ -1077,9 +1080,15 @@ function closeChannelPreview() {
   return true;
 }
 
+// Build URL for Watch Later video with playlist context
+function getWatchLaterVideoUrl(video) {
+  const index = watchLaterVideos.findIndex(v => v.id === video.id) + 1;
+  return `https://www.youtube.com/watch?v=${video.id}&list=WL&index=${index}`;
+}
+
 // Video Preview - opens directly on YouTube since embeds don't work from chrome-extension:// origin
 function showVideoPreview(video) {
-  window.open(`https://www.youtube.com/watch?v=${video.id}`, '_blank');
+  window.open(getWatchLaterVideoUrl(video), '_blank');
 }
 
 // Channel Preview - fetches videos from the channel's profile
@@ -2477,7 +2486,10 @@ document.addEventListener('keydown', (e) => {
     } else {
       const video = filteredVideos[focusedIndex];
       if (video) {
-        window.open(`https://www.youtube.com/watch?v=${video.id}`, '_blank');
+        const url = currentTab === 'watchlater'
+          ? getWatchLaterVideoUrl(video)
+          : `https://www.youtube.com/watch?v=${video.id}`;
+        window.open(url, '_blank');
       }
     }
   } else if (e.key === 'r') {
@@ -2532,7 +2544,10 @@ document.addEventListener('keydown', (e) => {
     } else {
       const video = filteredVideos[focusedIndex];
       if (video) {
-        window.open(`https://www.youtube.com/watch?v=${video.id}`, '_blank');
+        const url = currentTab === 'watchlater'
+          ? getWatchLaterVideoUrl(video)
+          : `https://www.youtube.com/watch?v=${video.id}`;
+        window.open(url, '_blank');
       }
     }
   } else if (e.key === 'y') {
@@ -2547,7 +2562,9 @@ document.addEventListener('keydown', (e) => {
     } else {
       const video = filteredVideos[focusedIndex];
       if (video) {
-        url = `https://www.youtube.com/watch?v=${video.id}`;
+        url = currentTab === 'watchlater'
+          ? getWatchLaterVideoUrl(video)
+          : `https://www.youtube.com/watch?v=${video.id}`;
       }
     }
     if (url) {
