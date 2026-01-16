@@ -1,4 +1,40 @@
-// Shared types for NuTube extension message passing
+/**
+ * NuTube Extension Message Protocol
+ *
+ * Defines the typed messages exchanged between:
+ * - Dashboard UI (sender)
+ * - Background service worker (relay)
+ * - Content script (executor)
+ *
+ * MESSAGE CATEGORIES:
+ *
+ * DATA FETCHING:
+ * - GET_WATCH_LATER: Fetch all Watch Later videos
+ * - GET_SUBSCRIPTIONS: Fetch subscription feed videos
+ * - GET_MORE_SUBSCRIPTIONS: Load next page of subscriptions
+ * - GET_PLAYLISTS: Fetch user's playlists
+ * - GET_CHANNELS: Fetch subscribed channels
+ * - GET_MORE_CHANNELS: Load next page of channels
+ * - GET_CHANNEL_VIDEOS: Fetch videos from a specific channel
+ * - GET_CHANNEL_SUGGESTIONS: Fetch similar channels
+ *
+ * WATCH LATER OPERATIONS:
+ * - REMOVE_FROM_WATCH_LATER: Remove video from Watch Later
+ * - ADD_TO_WATCH_LATER: Add video to Watch Later
+ * - MOVE_TO_TOP: Move video to top of Watch Later
+ * - MOVE_TO_BOTTOM: Move video to bottom of Watch Later
+ * - MOVE_TO_PLAYLIST: Move video from Watch Later to another playlist
+ *
+ * PLAYLIST OPERATIONS:
+ * - ADD_TO_PLAYLIST: Add video to a playlist
+ *
+ * SUBSCRIPTION OPERATIONS:
+ * - SUBSCRIBE: Subscribe to a channel
+ * - UNSUBSCRIBE: Unsubscribe from a channel
+ *
+ * UTILITY:
+ * - PING: Health check for content script connectivity
+ */
 
 export type MessageType =
   | { type: 'GET_WATCH_LATER' }
