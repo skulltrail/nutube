@@ -1,5 +1,34 @@
-// Background service worker for NuTube
-// Relays messages between dashboard and content script running on YouTube
+/**
+ * NuTube Background Service Worker
+ *
+ * This service worker acts as a message relay between the dashboard UI and the
+ * content script running on YouTube pages.
+ *
+ * ARCHITECTURE OVERVIEW:
+ * ┌─────────────┐     chrome.runtime     ┌──────────────────┐     chrome.tabs     ┌─────────────┐
+ * │  Dashboard  │ ──────────────────────►│ Background Worker│ ───────────────────►│Content Script│
+ * │ (dashboard) │ ◄────────────────────── │   (background)   │ ◄───────────────────│  (content)   │
+ * └─────────────┘     sendResponse        └──────────────────┘    sendResponse     └─────────────┘
+ *
+ * MESSAGE FLOW:
+ * 1. Dashboard sends message via chrome.runtime.sendMessage()
+ * 2. Background worker receives message, validates source
+ * 3. Background worker finds/creates YouTube tab
+ * 4. Background worker relays message via chrome.tabs.sendMessage()
+ * 5. Content script executes InnerTube API call
+ * 6. Response flows back through the same chain
+ *
+ * WHY THIS ARCHITECTURE?
+ * - Content scripts can only run on matching URL patterns (youtube.com)
+ * - Content scripts have access to YouTube's session cookies and can make
+ *   authenticated InnerTube API requests
+ * - The dashboard runs as an extension page without YouTube context
+ * - The background worker bridges these two isolated contexts
+ *
+ * SINGLETON TAB MANAGEMENT:
+ * Uses youTubeTabPromise to prevent race conditions when multiple messages
+ * arrive simultaneously - ensures only one YouTube tab is created/reused.
+ */
 
 import { MessageType } from './types';
 
