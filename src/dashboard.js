@@ -163,6 +163,9 @@ const UI_SCALE_MAX = 2.0;
 /** Step size for scale adjustments */
 const UI_SCALE_STEP = 0.1;
 
+// Hide Watch Later items in subscriptions (on by default)
+let hideWatchLaterInSubs = true;
+
 // Undo history
 const undoStack = [];
 
@@ -348,6 +351,7 @@ function renderShortcuts() {
         shortcuts: [
           { keys: ['w'], desc: 'Add to Watch Later' },
           { keys: ['h'], desc: 'Hide video' },
+          { keys: ['f'], desc: 'Toggle WL filter' },
           { keys: ['m'], desc: 'Add to playlist' },
           { keys: ['1-9'], desc: 'Quick add' },
         ]
@@ -531,6 +535,34 @@ function resetUiScale() {
   applyUiScale();
   saveUiScale();
   showToast('Zoom: 100% (reset)', 'success');
+}
+
+// Hide Watch Later filter storage
+async function loadHideWatchLaterPref() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['hideWatchLaterInSubs'], (result) => {
+      // Default to true if not set
+      hideWatchLaterInSubs = result.hideWatchLaterInSubs !== false;
+      resolve();
+    });
+  });
+}
+
+async function saveHideWatchLaterPref() {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ hideWatchLaterInSubs }, resolve);
+  });
+}
+
+/**
+ * Toggle the Watch Later filter in subscriptions view
+ */
+function toggleHideWatchLater() {
+  hideWatchLaterInSubs = !hideWatchLaterInSubs;
+  saveHideWatchLaterPref();
+  renderVideos();
+  const state = hideWatchLaterInSubs ? 'Hidden' : 'Shown';
+  showToast(`Watch Later items: ${state}`, 'success');
 }
 
 // Update mode indicator in footer
@@ -863,13 +895,23 @@ function isInWatchLater(videoId) {
 // Render video list
 function renderVideos() {
   const query = searchQuery.toLowerCase();
+
+  // Base filter: exclude hidden videos
+  let baseFilter = v => !hiddenVideoIds.has(v.id);
+
+  // In subscriptions tab, optionally hide videos already in Watch Later
+  if (currentTab === 'subscriptions' && hideWatchLaterInSubs) {
+    const origFilter = baseFilter;
+    baseFilter = v => origFilter(v) && !isInWatchLater(v.id);
+  }
+
   filteredVideos = query
     ? videos.filter(v =>
-        !hiddenVideoIds.has(v.id) && 
+        baseFilter(v) &&
         (v.title.toLowerCase().includes(query) ||
         v.channel.toLowerCase().includes(query))
       )
-    : videos.filter(v => !hiddenVideoIds.has(v.id));
+    : videos.filter(baseFilter);
 
   videoList.innerHTML = filteredVideos.map((video, index) => {
     const inWL = currentTab === 'subscriptions' && isInWatchLater(video.id);
@@ -2062,6 +2104,7 @@ function renderHelpModal() {
     actionsShortcuts = [
       { keys: ['w'], desc: 'Add to Watch Later' },
       { keys: ['h'], desc: 'Hide video(s)' },
+      { keys: ['f'], desc: 'Toggle WL filter' },
       { keys: ['m'], desc: 'Add to playlist' },
       { keys: ['1-9'], desc: 'Quick add to playlist' },
     ];
@@ -2519,6 +2562,11 @@ document.addEventListener('keydown', (e) => {
     if (currentTab === 'subscriptions') {
       toggleHideVideo();
     }
+  } else if (e.key === 'f') {
+    // Toggle Watch Later filter (subscriptions tab only)
+    if (currentTab === 'subscriptions') {
+      toggleHideWatchLater();
+    }
   } else if (e.key === 'Tab') {
     // Cycle through tabs (SHIFT+TAB goes backwards)
     e.preventDefault();
@@ -2786,6 +2834,7 @@ async function loadAllData() {
       loadQuickMoveAssignments(),
       loadHiddenVideos(),
       loadUiScale(),
+      loadHideWatchLaterPref(),
     ]);
 
     if (wlResult.success) {
