@@ -1739,8 +1739,10 @@ async function moveToTop() {
   // Save for undo
   saveUndoState('move_to_top', { targets: [...targets] });
 
-  // Remember original position to keep cursor at next video
-  const originalIndex = focusedIndex;
+  // Save selection info before clearing - we want to focus on what was the next item after the selection
+  const maxSelectedIndex = selectedIndices.size > 0
+    ? Math.max(...selectedIndices)
+    : focusedIndex;
 
   // Optimistically update UI immediately - move targets to top in order
   const targetIds = new Set(targets.map(v => v.id));
@@ -1753,8 +1755,9 @@ async function moveToTop() {
   selectedIndices.clear();
   updateMode();
 
-  // Keep cursor at same position (now pointing to next video), clamped to valid range
-  focusedIndex = Math.min(originalIndex, videos.length - 1);
+  // Items after selection stay at their original positions (left shift from removal + right shift from prepend = net 0)
+  // So the next-in-line item is at maxSelectedIndex + 1 (accounting for the prepended items)
+  focusedIndex = Math.min(maxSelectedIndex + 1, videos.length - 1);
   renderVideos();
 
   // Show initial toast - user can continue immediately
@@ -1793,8 +1796,11 @@ async function moveToBottom() {
   // Save for undo
   saveUndoState('move_to_bottom', { targets: [...targets] });
 
-  // Remember original position to keep cursor at next video
-  const originalIndex = focusedIndex;
+  // Save selection info before clearing - we want to focus on what was the next item after the selection
+  const maxSelectedIndex = selectedIndices.size > 0
+    ? Math.max(...selectedIndices)
+    : focusedIndex;
+  const selectionSize = selectedIndices.size > 0 ? selectedIndices.size : 1;
 
   // Optimistically update UI immediately - move targets to bottom in order
   const targetIds = new Set(targets.map(v => v.id));
@@ -1807,8 +1813,9 @@ async function moveToBottom() {
   selectedIndices.clear();
   updateMode();
 
-  // Keep cursor at same position (now pointing to next video), clamped to valid range
-  focusedIndex = Math.min(originalIndex, videos.length - 1);
+  // Items after selection shift left by selectionSize (since removed items go to end, not prepended)
+  // So the next-in-line item is at (maxSelectedIndex + 1) - selectionSize
+  focusedIndex = Math.max(0, Math.min(maxSelectedIndex + 1 - selectionSize, videos.length - 1));
   renderVideos();
 
   // Show initial toast - user can continue immediately
