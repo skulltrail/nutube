@@ -25,6 +25,7 @@
       --warning: #ffaa44;
       --font-mono: 'JetBrains Mono', monospace;
       --font-sans: 'Space Grotesk', sans-serif;
+      --ui-scale: 1;
     }
 
     * {
@@ -43,7 +44,7 @@
       background: var(--bg-primary);
       color: var(--text-primary);
       font-family: var(--font-mono);
-      font-size: 13px;
+      font-size: calc(13px * var(--ui-scale));
       line-height: 1.5;
       min-height: 100vh;
       overflow: hidden;
@@ -181,10 +182,10 @@
 
     .video-item {
       display: grid;
-      grid-template-columns: 32px 120px 1fr auto;
-      gap: 12px;
+      grid-template-columns: calc(32px * var(--ui-scale)) calc(120px * var(--ui-scale)) 1fr auto;
+      gap: calc(12px * var(--ui-scale));
       align-items: center;
-      padding: 8px 12px;
+      padding: calc(8px * var(--ui-scale)) calc(12px * var(--ui-scale));
       border-radius: 4px;
       cursor: pointer;
       transition: background 0.1s;
@@ -213,8 +214,8 @@
     }
 
     .video-thumbnail {
-      width: 120px;
-      height: 68px;
+      width: calc(120px * var(--ui-scale));
+      height: calc(68px * var(--ui-scale));
       border-radius: 4px;
       object-fit: cover;
       background: var(--bg-tertiary);
@@ -269,8 +270,8 @@
     /* Thumbnail wrapper for overlays */
     .thumbnail-wrapper {
       position: relative;
-      width: 120px;
-      height: 68px;
+      width: calc(120px * var(--ui-scale));
+      height: calc(68px * var(--ui-scale));
       flex-shrink: 0;
     }
 

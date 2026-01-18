@@ -151,6 +151,18 @@ const channelUndoStack = [];
 // Quick move assignments: { 1: "playlistId", 2: "playlistId", ... }
 let quickMoveAssignments = {};
 
+// UI scale (zoom level) - 0.5 to 2.0, default 1.0
+let uiScale = 1.0;
+
+/** Minimum UI scale factor */
+const UI_SCALE_MIN = 0.5;
+
+/** Maximum UI scale factor */
+const UI_SCALE_MAX = 2.0;
+
+/** Step size for scale adjustments */
+const UI_SCALE_STEP = 0.1;
+
 // Undo history
 const undoStack = [];
 
@@ -325,6 +337,7 @@ function renderShortcuts() {
           { keys: ['y'], desc: 'Copy URL' },
           { keys: ['r'], desc: 'Refresh' },
           { keys: ['Tab'], desc: 'Switch tab' },
+          { keys: ['⌘-', '⌘+'], desc: 'Zoom out/in' },
           { keys: ['?'], desc: 'Help' },
         ]
       },
@@ -364,6 +377,7 @@ function renderShortcuts() {
           { keys: ['y'], desc: 'Copy URL' },
           { keys: ['r'], desc: 'Refresh' },
           { keys: ['Tab'], desc: 'Switch tab' },
+          { keys: ['⌘-', '⌘+'], desc: 'Zoom out/in' },
           { keys: ['?'], desc: 'Help' },
         ]
       },
@@ -402,6 +416,7 @@ function renderShortcuts() {
           { keys: ['y'], desc: 'Copy URL' },
           { keys: ['r'], desc: 'Refresh' },
           { keys: ['Tab'], desc: 'Switch tab' },
+          { keys: ['⌘-', '⌘+'], desc: 'Zoom out/in' },
           { keys: ['?'], desc: 'Help' },
         ]
       },
@@ -468,6 +483,54 @@ async function saveHiddenVideos() {
   return new Promise((resolve) => {
     chrome.storage.local.set({ hiddenVideoIds: Array.from(hiddenVideoIds) }, resolve);
   });
+}
+
+// UI Scale storage
+async function loadUiScale() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['uiScale'], (result) => {
+      uiScale = result.uiScale ?? 1.0;
+      applyUiScale();
+      resolve();
+    });
+  });
+}
+
+async function saveUiScale() {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ uiScale }, resolve);
+  });
+}
+
+/**
+ * Apply the current UI scale to the document
+ */
+function applyUiScale() {
+  document.documentElement.style.setProperty('--ui-scale', uiScale.toString());
+}
+
+/**
+ * Adjust UI scale by a step (positive to zoom in, negative to zoom out)
+ * @param {number} direction - 1 for zoom in, -1 for zoom out
+ */
+function adjustUiScale(direction) {
+  const newScale = Math.round((uiScale + (direction * UI_SCALE_STEP)) * 10) / 10;
+  if (newScale >= UI_SCALE_MIN && newScale <= UI_SCALE_MAX) {
+    uiScale = newScale;
+    applyUiScale();
+    saveUiScale();
+    showToast(`Zoom: ${Math.round(uiScale * 100)}%`, 'success');
+  }
+}
+
+/**
+ * Reset UI scale to default (100%)
+ */
+function resetUiScale() {
+  uiScale = 1.0;
+  applyUiScale();
+  saveUiScale();
+  showToast('Zoom: 100% (reset)', 'success');
 }
 
 // Update mode indicator in footer
@@ -1964,6 +2027,7 @@ function renderHelpModal() {
     { keys: ['y'], desc: 'Copy URL' },
     { keys: ['Tab'], desc: 'Next/prev tab' },
     { keys: ['r'], desc: 'Refresh' },
+    { keys: ['⌘-', '⌘+', '⌘0'], desc: 'Zoom out/in/reset' },
     { keys: ['?'], desc: 'Toggle help' },
   ];
 
@@ -2115,6 +2179,23 @@ document.addEventListener('keydown', (e) => {
       searchInput.blur();
     }
     return;
+  }
+
+  // UI Zoom shortcuts (Cmd/Ctrl + -/=/0) - work globally except in search
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+    if (e.key === '=' || e.key === '+') {
+      e.preventDefault();
+      adjustUiScale(1); // Zoom in
+      return;
+    } else if (e.key === '-') {
+      e.preventDefault();
+      adjustUiScale(-1); // Zoom out
+      return;
+    } else if (e.key === '0') {
+      e.preventDefault();
+      resetUiScale(); // Reset to 100%
+      return;
+    }
   }
 
   // Channel preview modal handling
@@ -2704,6 +2785,7 @@ async function loadAllData() {
       sendMessage({ type: 'GET_CHANNELS' }),
       loadQuickMoveAssignments(),
       loadHiddenVideos(),
+      loadUiScale(),
     ]);
 
     if (wlResult.success) {
