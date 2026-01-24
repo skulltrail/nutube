@@ -110,6 +110,7 @@ let visualModeStart = null;
 let visualBlockMode = false; // true = block mode (V), false = line mode (v)
 let searchQuery = '';
 let modalFocusedIndex = 0;
+let currentModalItems = [];
 let isModalOpen = false;
 let isHelpOpen = false;
 let pendingG = false;
@@ -727,6 +728,41 @@ async function addToWatchLater() {
 }
 
 /**
+ * Toggle watched status on focused/selected videos
+ */
+function toggleWatched() {
+  const targets = getTargetVideos();
+  if (targets.length === 0) return;
+
+  let markedCount = 0;
+  let unmarkedCount = 0;
+  const updated = { ...watchedOverrides };
+
+  for (const video of targets) {
+    const currentlyWatched = isFullyWatched(video);
+    if (currentlyWatched) {
+      updated[video.id] = { watched: false, timestamp: Date.now() };
+      unmarkedCount++;
+    } else {
+      updated[video.id] = { watched: true, timestamp: Date.now() };
+      markedCount++;
+    }
+  }
+
+  watchedOverrides = updated;
+  saveWatchedOverrides();
+  renderVideos();
+
+  if (markedCount > 0 && unmarkedCount > 0) {
+    showToast(`${markedCount} marked watched, ${unmarkedCount} unmarked`, 'success');
+  } else if (markedCount > 0) {
+    showToast(`${markedCount} video(s) marked as watched`, 'success');
+  } else {
+    showToast(`${unmarkedCount} video(s) unmarked`, 'success');
+  }
+}
+
+/**
  * Remove a video from Watch Later (used in subscriptions tab)
  * Finds the video in the local Watch Later cache to get setVideoId,
  * then sends remove request to YouTube.
@@ -1075,7 +1111,14 @@ function getSortedPlaylists() {
 // Render modal playlists
 function renderModalPlaylists() {
   const sortedPlaylists = getSortedPlaylists();
-  modalPlaylists.innerHTML = sortedPlaylists.map((playlist, index) => {
+  // In subscriptions tab, prepend Watch Later as first option
+  const watchLaterEntry = { id: 'WL', title: 'Watch Later', videoCount: watchLaterVideos.length };
+  const modalItems = currentTab === 'subscriptions'
+    ? [watchLaterEntry, ...sortedPlaylists]
+    : sortedPlaylists;
+  currentModalItems = modalItems;
+
+  modalPlaylists.innerHTML = modalItems.map((playlist, index) => {
     const quickMoveNum = getQuickMoveNumber(playlist.id);
     return `
     <div class="modal-playlist ${modalFocusedIndex === index ? 'focused' : ''}"
@@ -1099,7 +1142,9 @@ function renderModalPlaylists() {
     el.addEventListener('click', () => {
       const playlistId = el.dataset.playlistId;
       closeModal();
-      if (currentTab === 'subscriptions') {
+      if (playlistId === 'WL') {
+        addToWatchLater();
+      } else if (currentTab === 'subscriptions') {
         addToPlaylist(playlistId);
       } else {
         moveToPlaylist(playlistId);
@@ -2332,12 +2377,11 @@ document.addEventListener('keydown', (e) => {
   // Modal handling
   if (isModalOpen) {
     e.preventDefault();
-    const sortedPlaylists = getSortedPlaylists();
     if (e.key === 'Escape') {
       closeModal();
     } else if (e.key === 'j' || e.key === 'ArrowDown') {
       enableKeyboardNavMode();
-      modalFocusedIndex = Math.min(modalFocusedIndex + 1, sortedPlaylists.length - 1);
+      modalFocusedIndex = Math.min(modalFocusedIndex + 1, currentModalItems.length - 1);
       renderModalPlaylists();
     } else if (e.key === 'k' || e.key === 'ArrowUp') {
       enableKeyboardNavMode();
@@ -2345,16 +2389,19 @@ document.addEventListener('keydown', (e) => {
       renderModalPlaylists();
     } else if (e.key === 'Enter') {
       closeModal();
-      const playlistId = sortedPlaylists[modalFocusedIndex]?.id;
-      if (currentTab === 'subscriptions') {
-        addToPlaylist(playlistId);
+      const item = currentModalItems[modalFocusedIndex];
+      if (!item) return;
+      if (item.id === 'WL') {
+        addToWatchLater();
+      } else if (currentTab === 'subscriptions') {
+        addToPlaylist(item.id);
       } else {
-        moveToPlaylist(playlistId);
+        moveToPlaylist(item.id);
       }
     } else if (e.key >= '1' && e.key <= '9') {
       // Assign quick move number to focused playlist
       const num = e.key;
-      const focusedPlaylist = sortedPlaylists[modalFocusedIndex];
+      const focusedPlaylist = currentModalItems[modalFocusedIndex];
       if (focusedPlaylist) {
         assignQuickMove(num, focusedPlaylist.id);
         showToast(`Assigned ${num} to "${focusedPlaylist.title}"`, 'success');
@@ -2363,7 +2410,7 @@ document.addEventListener('keydown', (e) => {
       }
     } else if (e.key === '0') {
       // Clear quick move assignment from focused playlist
-      const focusedPlaylist = sortedPlaylists[modalFocusedIndex];
+      const focusedPlaylist = currentModalItems[modalFocusedIndex];
       if (focusedPlaylist) {
         const currentNum = getQuickMoveNumber(focusedPlaylist.id);
         if (currentNum) {
@@ -2577,11 +2624,9 @@ document.addEventListener('keydown', (e) => {
     // Cycle through tabs (SHIFT+TAB goes backwards)
     e.preventDefault();
     switchTab(e.shiftKey ? getPrevTab() : getNextTab());
-  } else if (e.key === 'w') {
-    // Add to Watch Later (subscriptions tab only)
-    if (currentTab === 'subscriptions') {
-      addToWatchLater();
-    }
+  } else if (e.key === 'w' && !e.shiftKey) {
+    // Toggle watched status
+    toggleWatched();
   } else if (e.key === 'x' || e.key === 'd' || e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
     if (currentTab === 'watchlater') {
