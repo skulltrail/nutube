@@ -1926,13 +1926,14 @@ async function deleteVideos() {
  * Open the bulk purge confirmation dialog showing all watched videos
  */
 function openPurgeDialog() {
-  const watchedVideos = filteredVideos.filter(v => isFullyWatched(v));
+  const purgeModal = document.getElementById('purge-modal');
+  if (purgeModal.style.display === 'flex') return;
+
+  const watchedVideos = videos.filter(v => !hiddenVideoIds.has(v.id) && isFullyWatched(v));
   if (watchedVideos.length === 0) {
     showToast('No watched videos to remove', 'info');
     return;
   }
-
-  const purgeModal = document.getElementById('purge-modal');
   const purgeList = document.getElementById('purge-list');
   const purgeCount = document.getElementById('purge-count');
 
@@ -2021,11 +2022,10 @@ async function executePurge(watchedVideos) {
     saveUndoState('delete', { videos: [...removedVideos] });
   }
 
-  // Clamp focused index
-  focusedIndex = Math.min(focusedIndex, filteredVideos.length - 1);
-  if (focusedIndex < 0) focusedIndex = 0;
   selectedIndices.clear();
-
+  renderVideos();
+  // Clamp after renderVideos recomputes filteredVideos
+  focusedIndex = Math.min(focusedIndex, Math.max(0, filteredVideos.length - 1));
   renderVideos();
   setStatus(`Removed ${removed} watched video(s)`, 'success');
   showToast(`Purged ${removed} watched video(s)`, 'success');
@@ -2750,8 +2750,10 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     switchTab(e.shiftKey ? getPrevTab() : getNextTab());
   } else if (e.key === 'w' && !e.shiftKey) {
-    // Toggle watched status
-    toggleWatched();
+    // Toggle watched status (video tabs only)
+    if (currentTab !== 'channels') {
+      toggleWatched();
+    }
   } else if (e.key === 'H') {
     // Toggle hide watched (global)
     toggleHideWatched();
@@ -2792,14 +2794,22 @@ document.addEventListener('keydown', (e) => {
     if (currentTab === 'watchlater') {
       const playlist = getPlaylistByQuickMove(e.key);
       if (playlist) {
-        moveToPlaylist(playlist.id);
+        if (playlist.id === 'WL') {
+          showToast('Cannot move from Watch Later to Watch Later', 'info');
+        } else {
+          moveToPlaylist(playlist.id);
+        }
       } else {
         showToast(`No playlist assigned to ${e.key}. Press m to assign.`, 'info');
       }
     } else if (currentTab === 'subscriptions') {
       const playlist = getPlaylistByQuickMove(e.key);
       if (playlist) {
-        addToPlaylist(playlist.id);
+        if (playlist.id === 'WL') {
+          addToWatchLater();
+        } else {
+          addToPlaylist(playlist.id);
+        }
       } else {
         showToast(`No playlist assigned to ${e.key}. Press m to assign.`, 'info');
       }
