@@ -910,6 +910,12 @@ function renderVideos() {
   // Base filter: exclude hidden videos
   let baseFilter = v => !hiddenVideoIds.has(v.id);
 
+  // Hide fully-watched videos when toggle is active
+  if (hideWatched) {
+    const origFilter = baseFilter;
+    baseFilter = v => origFilter(v) && !isFullyWatched(v);
+  }
+
   // In subscriptions tab, optionally hide videos already in Watch Later
   if (currentTab === 'subscriptions' && hideWatchLaterInSubs) {
     const origFilter = baseFilter;
@@ -926,23 +932,23 @@ function renderVideos() {
 
   videoList.innerHTML = filteredVideos.map((video, index) => {
     const inWL = currentTab === 'subscriptions' && isInWatchLater(video.id);
-    const isWatched = video.watched || (video.progressPercent && video.progressPercent >= 90);
+    const progress = getWatchedProgress(video);
+    const fullyWatched = progress >= 100;
     return `
-    <div class="video-item ${selectedIndices.has(index) ? 'selected' : ''} ${focusedIndex === index ? 'focused' : ''} ${isWatched ? 'watched' : ''}"
+    <div class="video-item ${selectedIndices.has(index) ? 'selected' : ''} ${focusedIndex === index ? 'focused' : ''} ${fullyWatched ? 'fully-watched' : ''}"
          data-index="${index}"
          data-video-id="${video.id}">
       <span class="video-index">${index + 1}</span>
       <div class="thumbnail-wrapper">
         <img class="video-thumbnail" src="${fixUrl(video.thumbnail)}" alt="" loading="lazy">
-        ${isWatched ? '<div class="watched-overlay"><span>Watched</span></div>' : ''}
+        ${progress > 0 ? `<div class="video-progress" style="width: ${progress}%"></div>` : ''}
       </div>
       <div class="video-info">
         <div class="video-title" title="${escapeHtml(video.title)}">${escapeHtml(video.title)}</div>
         <div class="video-channel">${escapeHtml(video.channel)}</div>
       </div>
       <div class="video-meta">
-        ${isWatched ? '<span class="badge-watched">Watched</span>' : ''}
-        ${inWL ? '<span class="wl-check" title="In Watch Later">✓</span>' : ''}
+        ${inWL ? '<span class="wl-check" title="In Watch Later">&#10003;</span>' : ''}
         <span class="video-duration">${video.duration || '--:--'}</span>
       </div>
     </div>
