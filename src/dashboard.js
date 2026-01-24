@@ -154,6 +154,12 @@ let quickMoveAssignments = {};
 // Hide Watch Later items in subscriptions (on by default)
 let hideWatchLaterInSubs = true;
 
+// Watched status overrides (user-set, persisted)
+let watchedOverrides = {};
+
+// Global hide-watched toggle (persisted)
+let hideWatched = false;
+
 // Undo history
 const undoStack = [];
 
@@ -489,6 +495,74 @@ async function saveHideWatchLaterPref() {
   return new Promise((resolve) => {
     chrome.storage.local.set({ hideWatchLaterInSubs }, resolve);
   });
+}
+
+// Watched overrides storage
+async function loadWatchedOverrides() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['watchedOverrides'], (result) => {
+      watchedOverrides = result.watchedOverrides || {};
+      resolve();
+    });
+  });
+}
+
+async function saveWatchedOverrides() {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ watchedOverrides }, resolve);
+  });
+}
+
+// Hide watched toggle storage
+async function loadHideWatchedPref() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['hideWatched'], (result) => {
+      hideWatched = result.hideWatched === true;
+      resolve();
+    });
+  });
+}
+
+async function saveHideWatchedPref() {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ hideWatched }, resolve);
+  });
+}
+
+/**
+ * Get the effective watched progress for a video (0-100).
+ * Local overrides take precedence over YouTube's data.
+ */
+function getWatchedProgress(video) {
+  const override = watchedOverrides[video.id];
+  if (override) {
+    return override.watched ? 100 : 0;
+  }
+  return video.progressPercent || 0;
+}
+
+/**
+ * Check if a video is fully watched (100% or override).
+ */
+function isFullyWatched(video) {
+  return getWatchedProgress(video) >= 100;
+}
+
+function pruneStaleOverrides(loadedVideoIds) {
+  const now = Date.now();
+  const ninetyDays = 90 * 24 * 60 * 60 * 1000;
+  let changed = false;
+  const pruned = { ...watchedOverrides };
+  for (const videoId of Object.keys(pruned)) {
+    if (!loadedVideoIds.has(videoId) && (now - pruned[videoId].timestamp) > ninetyDays) {
+      delete pruned[videoId];
+      changed = true;
+    }
+  }
+  if (changed) {
+    watchedOverrides = pruned;
+    saveWatchedOverrides();
+  }
 }
 
 /**
@@ -2753,6 +2827,8 @@ async function loadAllData() {
       loadQuickMoveAssignments(),
       loadHiddenVideos(),
       loadHideWatchLaterPref(),
+      loadWatchedOverrides(),
+      loadHideWatchedPref(),
     ]);
 
     if (wlResult.success) {
@@ -2792,6 +2868,10 @@ async function loadAllData() {
       videos = currentTab === 'watchlater' ? watchLaterVideos : subscriptionVideos;
       renderVideos();
     }
+
+    // Prune stale watched overrides (videos not loaded for 90+ days)
+    const allLoadedIds = new Set([...watchLaterVideos, ...subscriptionVideos].map(v => v.id));
+    pruneStaleOverrides(allLoadedIds);
 
     setStatus('Ready');
     showToast(`Loaded ${watchLaterVideos.length} WL, ${subscriptionVideos.length} Subs, ${channels.length} Channels`, 'success');
