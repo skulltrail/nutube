@@ -50,6 +50,9 @@ const PENDING_G_TIMEOUT_MS = 500;
 /** Duration to show toast notifications (ms) */
 const TOAST_DURATION_MS = 3000;
 
+/** Time-to-live for stale watched overrides without matching video (ms) */
+const STALE_OVERRIDE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
 /** Duration to show undo toast for channel unsubscribe (ms) */
 const UNDO_TOAST_DURATION_MS = 5000;
 
@@ -548,20 +551,17 @@ function isFullyWatched(video) {
   return getWatchedProgress(video) >= 100;
 }
 
-function pruneStaleOverrides(loadedVideoIds) {
+async function pruneStaleOverrides(loadedVideoIds) {
   const now = Date.now();
-  const ninetyDays = 90 * 24 * 60 * 60 * 1000;
-  let changed = false;
-  const pruned = { ...watchedOverrides };
-  for (const videoId of Object.keys(pruned)) {
-    if (!loadedVideoIds.has(videoId) && (now - pruned[videoId].timestamp) > ninetyDays) {
-      delete pruned[videoId];
-      changed = true;
-    }
-  }
+  const pruned = Object.fromEntries(
+    Object.entries(watchedOverrides).filter(([videoId, entry]) =>
+      loadedVideoIds.has(videoId) || (now - entry.timestamp) <= STALE_OVERRIDE_TTL_MS
+    )
+  );
+  const changed = Object.keys(pruned).length !== Object.keys(watchedOverrides).length;
   if (changed) {
     watchedOverrides = pruned;
-    saveWatchedOverrides();
+    await saveWatchedOverrides();
   }
 }
 
@@ -2869,9 +2869,11 @@ async function loadAllData() {
       renderVideos();
     }
 
-    // Prune stale watched overrides (videos not loaded for 90+ days)
-    const allLoadedIds = new Set([...watchLaterVideos, ...subscriptionVideos].map(v => v.id));
-    pruneStaleOverrides(allLoadedIds);
+    // Prune stale watched overrides only if both data sources loaded
+    if (watchLaterVideos.length > 0 || subscriptionVideos.length > 0) {
+      const allLoadedIds = new Set([...watchLaterVideos, ...subscriptionVideos].map(v => v.id));
+      await pruneStaleOverrides(allLoadedIds);
+    }
 
     setStatus('Ready');
     showToast(`Loaded ${watchLaterVideos.length} WL, ${subscriptionVideos.length} Subs, ${channels.length} Channels`, 'success');
