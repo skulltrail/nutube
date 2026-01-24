@@ -1918,6 +1918,115 @@ async function deleteVideos() {
   });
 }
 
+/**
+ * Open the bulk purge confirmation dialog showing all watched videos
+ */
+function openPurgeDialog() {
+  const watchedVideos = filteredVideos.filter(v => isFullyWatched(v));
+  if (watchedVideos.length === 0) {
+    showToast('No watched videos to remove', 'info');
+    return;
+  }
+
+  const purgeModal = document.getElementById('purge-modal');
+  const purgeList = document.getElementById('purge-list');
+  const purgeCount = document.getElementById('purge-count');
+
+  purgeCount.textContent = `${watchedVideos.length} video(s)`;
+  purgeList.innerHTML = watchedVideos.map(video => {
+    const progress = getWatchedProgress(video);
+    return `
+      <div class="purge-item">
+        <div>
+          <div class="purge-item-title">${escapeHtml(video.title)}</div>
+          <div class="purge-item-channel">${escapeHtml(video.channel)}</div>
+        </div>
+        <div class="purge-item-progress">${progress}%</div>
+      </div>
+    `;
+  }).join('');
+
+  purgeModal.style.display = 'flex';
+
+  const confirmBtn = document.getElementById('purge-confirm');
+  const cancelBtn = document.getElementById('purge-cancel');
+
+  const cleanup = () => {
+    purgeModal.style.display = 'none';
+    confirmBtn.removeEventListener('click', onConfirm);
+    cancelBtn.removeEventListener('click', onCancel);
+    document.removeEventListener('keydown', onKey, true);
+  };
+
+  const onConfirm = () => {
+    cleanup();
+    executePurge(watchedVideos);
+  };
+
+  const onCancel = () => {
+    cleanup();
+  };
+
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      onCancel();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      onConfirm();
+    }
+  };
+
+  confirmBtn.addEventListener('click', onConfirm);
+  cancelBtn.addEventListener('click', onCancel);
+  document.addEventListener('keydown', onKey, true);
+}
+
+/**
+ * Execute the bulk purge — remove all watched videos from Watch Later
+ */
+async function executePurge(watchedVideos) {
+  setStatus(`Removing ${watchedVideos.length} watched videos...`, 'loading');
+
+  const removedVideos = [];
+  let removed = 0;
+
+  for (const video of watchedVideos) {
+    try {
+      const result = await sendMessage({
+        type: 'REMOVE_FROM_WATCH_LATER',
+        videoId: video.id,
+        setVideoId: video.setVideoId,
+      });
+      if (result.success) {
+        removed++;
+        removedVideos.push(video);
+      }
+    } catch (err) {
+      errorLog('Failed to remove video:', video.id, err);
+    }
+  }
+
+  // Remove from local state
+  const removedIds = new Set(removedVideos.map(v => v.id));
+  videos = videos.filter(v => !removedIds.has(v.id));
+  watchLaterVideos = watchLaterVideos.filter(v => !removedIds.has(v.id));
+
+  // Push undo entry using saveUndoState pattern
+  if (removedVideos.length > 0) {
+    saveUndoState('delete', { videos: [...removedVideos] });
+  }
+
+  // Clamp focused index
+  focusedIndex = Math.min(focusedIndex, filteredVideos.length - 1);
+  if (focusedIndex < 0) focusedIndex = 0;
+  selectedIndices.clear();
+
+  renderVideos();
+  setStatus(`Removed ${removed} watched video(s)`, 'success');
+  showToast(`Purged ${removed} watched video(s)`, 'success');
+}
+
 async function moveToTop() {
   const targets = getTargetVideos();
   if (targets.length === 0) return;
@@ -2642,6 +2751,13 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'H') {
     // Toggle hide watched (global)
     toggleHideWatched();
+  } else if (e.key === 'W') {
+    // Bulk purge watched videos
+    if (currentTab === 'watchlater') {
+      openPurgeDialog();
+    } else {
+      showToast('Bulk purge only available in Watch Later', 'info');
+    }
   } else if (e.key === 'x' || e.key === 'd' || e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
     if (currentTab === 'watchlater') {

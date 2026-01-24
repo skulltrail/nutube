@@ -1332,6 +1332,74 @@
     .help-section-title.with-margin-top {
       margin: 16px 0 8px;
     }
+
+    /* Purge modal */
+    .purge-modal {
+      max-width: 600px;
+      max-height: 70vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .purge-list {
+      overflow-y: auto;
+      flex: 1;
+      padding: 8px 0;
+    }
+
+    .purge-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      padding: 6px 12px;
+      font-size: 12px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .purge-item-title {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .purge-item-channel {
+      color: var(--text-secondary);
+      font-size: 11px;
+    }
+
+    .purge-item-progress {
+      color: var(--accent);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      padding-top: 12px;
+      border-top: 1px solid var(--border-color);
+    }
+
+    .btn {
+      padding: 6px 16px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn-danger {
+      background: var(--accent);
+      color: white;
+    }
+
+    .btn-secondary {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+    }
   </style>
 </head>
 <body tabindex="-1">
@@ -1488,6 +1556,21 @@
       <div class="confirm-buttons">
         <button class="btn-cancel" id="confirm-cancel">Cancel</button>
         <button class="btn-confirm" id="confirm-ok">Unsubscribe</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Purge Watched Modal -->
+  <div class="modal-overlay" id="purge-modal" style="display: none;">
+    <div class="modal purge-modal">
+      <div class="modal-header">
+        <h3>Remove Watched Videos</h3>
+        <span class="modal-subtitle" id="purge-count"></span>
+      </div>
+      <div class="purge-list" id="purge-list"></div>
+      <div class="modal-actions">
+        <button class="btn btn-danger" id="purge-confirm">Remove All</button>
+        <button class="btn btn-secondary" id="purge-cancel">Cancel</button>
       </div>
     </div>
   </div>
