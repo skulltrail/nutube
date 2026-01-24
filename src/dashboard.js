@@ -2941,7 +2941,7 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'v' && e.ctrlKey) {
     // Visual Block mode (Ctrl+V) - non-consecutive multi-select with Space toggle
     e.preventDefault(); // Prevent paste
-    if (currentTab === 'channels') return;
+    if (currentTab === 'channels' || (currentTab === 'playlists' && playlistBrowserLevel === 'list')) return;
     if (visualModeStart === null) {
       visualModeStart = focusedIndex;
       visualBlockMode = true;
@@ -3007,8 +3007,8 @@ document.addEventListener('keydown', (e) => {
       }
     }
   } else if (e.key === 'v' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
-    // Visual Line mode (not for channels) - range selection with j/k
-    if (currentTab === 'channels') return;
+    // Visual Line mode (not for channels/playlist list) - range selection with j/k
+    if (currentTab === 'channels' || (currentTab === 'playlists' && playlistBrowserLevel === 'list')) return;
     if (visualModeStart === null) {
       visualModeStart = focusedIndex;
       visualBlockMode = false;
@@ -3036,8 +3036,8 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     switchTab(e.shiftKey ? getPrevTab() : getNextTab());
   } else if (e.key === 'w' && !e.shiftKey) {
-    // Toggle watched status (video tabs only)
-    if (currentTab !== 'channels') {
+    // Toggle watched status (video views only, not playlist list)
+    if (currentTab !== 'channels' && !(currentTab === 'playlists' && playlistBrowserLevel === 'list')) {
       toggleWatched();
     }
   } else if (e.key === 'H') {
