@@ -721,12 +721,23 @@ function renderPlaylistBrowser() {
     ? playlists.filter(p => p.title.toLowerCase().includes(query))
     : [...playlists];
 
+  // Clamp focusedIndex
+  if (filteredPlaylists.length === 0) {
+    focusedIndex = 0;
+  } else {
+    focusedIndex = Math.min(focusedIndex, filteredPlaylists.length - 1);
+  }
+
   videoList.innerHTML = filteredPlaylists.map((playlist, index) => {
     const focused = index === focusedIndex ? 'focused' : '';
-    return `<div class="video-item ${focused}" data-index="${index}">
-      <div class="video-info">
-        <div class="video-title">${escapeHtml(playlist.title)}</div>
-        <div class="video-channel">${playlist.videoCount} videos</div>
+    const thumbnailHtml = playlist.thumbnail
+      ? `<img src="${escapeHtml(playlist.thumbnail)}" alt="">`
+      : `<span class="playlist-thumbnail-placeholder">&#9654;</span>`;
+    return `<div class="playlist-browser-item ${focused}" data-index="${index}">
+      <div class="playlist-thumbnail">${thumbnailHtml}</div>
+      <div class="playlist-info">
+        <div class="playlist-title">${escapeHtml(playlist.title)}</div>
+        <div class="playlist-count">${Number(playlist.videoCount) || 0} videos</div>
       </div>
     </div>`;
   }).join('');
@@ -734,6 +745,65 @@ function renderPlaylistBrowser() {
   videoCountEl.textContent = filteredPlaylists.length;
   videoCountLabelEl.textContent = 'Playlists:';
   selectedCountEl.textContent = '0';
+
+  // Add click handlers
+  const items = videoList.querySelectorAll('.playlist-browser-item');
+  items.forEach((item, index) => {
+    item.addEventListener('click', () => {
+      focusedIndex = index;
+      drillIntoPlaylist(filteredPlaylists[index]);
+    });
+  });
+
+  // Scroll focused into view
+  const focusedEl = videoList.querySelector('.playlist-browser-item.focused');
+  if (focusedEl) {
+    focusedEl.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+async function drillIntoPlaylist(playlist) {
+  if (!playlist) return;
+
+  activePlaylistId = playlist.id;
+  activePlaylistTitle = playlist.title;
+  playlistBrowserLevel = 'videos';
+
+  // Show breadcrumb
+  breadcrumbEl.style.display = 'flex';
+  breadcrumbNameEl.textContent = playlist.title;
+
+  // Show loading state
+  setStatus(`Loading ${playlist.title}...`, 'loading');
+  videoList.innerHTML = '<div class="loading"><div class="spinner"></div><span>Loading playlist...</span></div>';
+
+  try {
+    const result = await sendMessage({
+      type: 'GET_PLAYLIST_VIDEOS',
+      playlistId: playlist.id,
+    });
+
+    if (result.success) {
+      playlistVideos = result.data || [];
+      videos = playlistVideos;
+      focusedIndex = 0;
+      selectedIndices.clear();
+      searchQuery = '';
+      searchInput.value = '';
+      renderVideos();
+      videoCountLabelEl.textContent = 'Videos:';
+      setStatus('Ready');
+    } else {
+      showToast('Failed to load playlist', 'error');
+      setStatus('Error loading playlist', 'error');
+      drillOutOfPlaylist();
+    }
+  } catch (error) {
+    errorLog('Failed to load playlist:', error);
+    showToast('Failed to load playlist', 'error');
+    setStatus('Error', 'error');
+    drillOutOfPlaylist();
+  }
 }
 
 function drillOutOfPlaylist() {
