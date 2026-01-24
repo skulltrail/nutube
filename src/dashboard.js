@@ -311,6 +311,9 @@ function renderShortcuts() {
           { keys: ['m'], desc: 'Move to playlist' },
           { keys: ['1-9'], desc: 'Quick move' },
           { keys: ['t', 'b'], desc: 'Move top/bottom' },
+          { keys: ['w'], desc: 'Toggle watched' },
+          { keys: ['H'], desc: 'Hide watched' },
+          { keys: ['W'], desc: 'Purge watched' },
           { keys: ['u'], desc: 'Undo' },
         ]
       },
@@ -347,7 +350,8 @@ function renderShortcuts() {
       {
         title: 'Actions',
         shortcuts: [
-          { keys: ['w'], desc: 'Add to Watch Later' },
+          { keys: ['w'], desc: 'Toggle watched' },
+          { keys: ['H'], desc: 'Hide watched' },
           { keys: ['h'], desc: 'Hide video' },
           { keys: ['f'], desc: 'Toggle WL filter' },
           { keys: ['m'], desc: 'Add to playlist' },
