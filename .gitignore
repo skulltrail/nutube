@@ -12,3 +12,6 @@ test-results/
 # Build artifacts
 coverage/
 dist/
+
+# Worktrees
+.worktrees/
