@@ -190,13 +190,13 @@ function parseVideoItem(item: any): Video | null {
   };
 }
 
-// Fetch Watch Later playlist
-async function getWatchLater(): Promise<Video[]> {
+// Shared helper: fetch videos from any playlist by browse ID
+async function fetchPlaylistVideos(browseId: string): Promise<Video[]> {
   const videos: Video[] = [];
   let continuation: string | null = null;
 
   const initialData = await innertubeRequest('browse', {
-    browseId: 'VLWL',
+    browseId,
   });
 
   const contents = initialData.contents?.twoColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents?.[0]?.playlistVideoListRenderer?.contents || [];
@@ -231,6 +231,16 @@ async function getWatchLater(): Promise<Video[]> {
   }
 
   return videos;
+}
+
+// Fetch Watch Later playlist
+async function getWatchLater(): Promise<Video[]> {
+  return fetchPlaylistVideos('VLWL');
+}
+
+// Fetch videos from a specific playlist
+async function getPlaylistVideos(playlistId: string): Promise<Video[]> {
+  return fetchPlaylistVideos('VL' + playlistId);
 }
 
 /**
@@ -811,11 +821,11 @@ function extractVideoCountFromPlaylistDetails(data: any): number {
   return findVideoCountInObject(data);
 }
 
-// Remove video from Watch Later
-async function removeFromWatchLater(videoId: string, setVideoId: string): Promise<{ success: boolean; error?: string }> {
+// Remove video from a specific playlist
+async function removeFromPlaylist(videoId: string, setVideoId: string, playlistId: string): Promise<{ success: boolean; error?: string }> {
   try {
     await innertubeRequest('browse/edit_playlist', {
-      playlistId: 'WL',
+      playlistId,
       actions: [{
         setVideoId,
         action: 'ACTION_REMOVE_VIDEO',
@@ -828,7 +838,39 @@ async function removeFromWatchLater(videoId: string, setVideoId: string): Promis
     if (e.message?.includes('409')) {
       return { success: true };
     }
-    console.warn('Remove video error:', e.message);
+    console.warn('Remove from playlist error:', e.message);
+    return { success: false, error: e.message || String(e) };
+  }
+}
+
+// Remove video from Watch Later (convenience wrapper)
+async function removeFromWatchLater(videoId: string, setVideoId: string): Promise<{ success: boolean; error?: string }> {
+  return removeFromPlaylist(videoId, setVideoId, 'WL');
+}
+
+// Create a new playlist
+async function createPlaylist(title: string): Promise<{ success: boolean; playlistId?: string; error?: string }> {
+  try {
+    const response = await innertubeRequest('playlist/create', { title });
+    return { success: true, playlistId: response.playlistId };
+  } catch (e: any) {
+    console.warn('Create playlist error:', e.message);
+    return { success: false, error: e.message || String(e) };
+  }
+}
+
+// Delete a playlist
+async function deletePlaylist(playlistId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    await innertubeRequest('playlist/delete', { playlistId });
+    return { success: true };
+  } catch (e: any) {
+    // 409 (Conflict) on delete means the playlist was already deleted or the
+    // deletion was processed despite the error response. Treat as success.
+    if (e.message?.includes('409')) {
+      return { success: true };
+    }
+    console.warn('Delete playlist error:', e.message);
     return { success: false, error: e.message || String(e) };
   }
 }
@@ -1444,6 +1486,26 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendRespons
         case 'GET_CHANNEL_VIDEOS': {
           const channelVideos = await getChannelVideos(message.channelId);
           sendResponse({ success: true, data: channelVideos });
+          break;
+        }
+        case 'GET_PLAYLIST_VIDEOS': {
+          const plVideos = await getPlaylistVideos(message.playlistId);
+          sendResponse({ success: true, data: plVideos });
+          break;
+        }
+        case 'REMOVE_FROM_PLAYLIST': {
+          const rmResult = await removeFromPlaylist(message.videoId, message.setVideoId, message.playlistId);
+          sendResponse(rmResult);
+          break;
+        }
+        case 'CREATE_PLAYLIST': {
+          const cpResult = await createPlaylist(message.title);
+          sendResponse(cpResult);
+          break;
+        }
+        case 'DELETE_PLAYLIST': {
+          const dpResult = await deletePlaylist(message.playlistId);
+          sendResponse(dpResult);
           break;
         }
         default:

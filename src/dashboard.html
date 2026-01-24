@@ -285,42 +285,119 @@
       height: 100%;
     }
 
-    /* Watched video overlay */
-    .watched-overlay {
+    /* Progress bar (watched indicator) */
+    .video-progress {
       position: absolute;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.7);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 4px;
+      bottom: 0;
+      left: 0;
+      height: 3px;
+      background: var(--accent);
+      border-radius: 0 0 4px 4px;
+      transition: width 0.2s;
     }
 
-    .watched-overlay span {
-      color: var(--text-muted);
-      font-size: 9px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      text-transform: uppercase;
-    }
-
-    /* Dim watched video text slightly */
-    .video-item.watched .video-title,
-    .video-item.watched .video-channel {
+    .video-item.fully-watched .video-title,
+    .video-item.fully-watched .video-channel {
       opacity: 0.6;
     }
 
-    /* Watched badge */
-    .badge-watched {
-      background: var(--bg-tertiary);
-      color: var(--success);
-      border: 1px solid var(--success);
-      padding: 1px 4px;
-      border-radius: 2px;
-      font-size: 9px;
+    /* Hide watched indicator in stats bar */
+    .hide-watched-indicator {
+      color: var(--warning);
+      font-size: 11px;
       font-weight: 600;
-      text-transform: uppercase;
-      margin-left: 6px;
+      display: none;
+    }
+
+    .hide-watched-indicator.active {
+      display: inline;
+    }
+
+    /* Breadcrumb navigation */
+    .breadcrumb {
+      padding: 8px 16px;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .breadcrumb-root {
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+
+    .breadcrumb-root:hover {
+      color: var(--text-secondary);
+    }
+
+    .breadcrumb-separator {
+      color: var(--text-muted);
+    }
+
+    .breadcrumb-current {
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+
+    /* Playlist browser items */
+    .playlist-browser-item {
+      display: grid;
+      grid-template-columns: 80px 1fr;
+      gap: 12px;
+      padding: 8px 16px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border-color);
+      align-items: center;
+    }
+
+    .playlist-browser-item:hover {
+      background: var(--bg-hover);
+    }
+
+    .playlist-browser-item.focused {
+      background: var(--bg-hover);
+      border-left: 3px solid var(--accent);
+      padding-left: 13px;
+    }
+
+    .playlist-thumbnail {
+      width: 80px;
+      height: 45px;
+      border-radius: 4px;
+      background: var(--bg-tertiary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .playlist-thumbnail img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .playlist-thumbnail-placeholder {
+      color: var(--text-muted);
+      font-size: 18px;
+    }
+
+    .playlist-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .playlist-info .playlist-title {
+      font-size: 13px;
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+
+    .playlist-info .playlist-count {
+      font-size: 11px;
+      color: var(--text-secondary);
     }
 
     /* Mode indicator in footer */
@@ -1342,6 +1419,74 @@
     .help-section-title.with-margin-top {
       margin: 16px 0 8px;
     }
+
+    /* Purge modal */
+    .purge-modal {
+      max-width: 600px;
+      max-height: 70vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .purge-list {
+      overflow-y: auto;
+      flex: 1;
+      padding: 8px 0;
+    }
+
+    .purge-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      padding: 6px 12px;
+      font-size: 12px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .purge-item-title {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .purge-item-channel {
+      color: var(--text-secondary);
+      font-size: 11px;
+    }
+
+    .purge-item-progress {
+      color: var(--accent);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      padding-top: 12px;
+      border-top: 1px solid var(--border-color);
+    }
+
+    .btn {
+      padding: 6px 16px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn-danger {
+      background: var(--accent);
+      color: white;
+    }
+
+    .btn-secondary {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+    }
   </style>
 </head>
 <body tabindex="-1">
@@ -1361,6 +1506,9 @@
         <button class="nav-tab" data-tab="channels" id="tab-channels">
           Channels<span class="tab-count" id="channels-count">-</span>
         </button>
+        <button class="nav-tab" data-tab="playlists" id="tab-playlists">
+          Playlists<span class="tab-count" id="playlists-count">-</span>
+        </button>
       </nav>
       <div class="stats">
         <div class="stat">
@@ -1371,11 +1519,19 @@
           <span>Selected:</span>
           <span class="stat-value" id="selected-count">0</span>
         </div>
+        <div class="stat">
+          <span class="hide-watched-indicator" id="hide-watched-indicator">Hiding watched</span>
+        </div>
       </div>
     </header>
 
     <main>
       <div class="video-list-wrapper">
+        <div class="breadcrumb" id="breadcrumb" style="display: none;">
+          <span class="breadcrumb-root">Playlists</span>
+          <span class="breadcrumb-separator">&gt;</span>
+          <span class="breadcrumb-current" id="breadcrumb-name"></span>
+        </div>
         <div class="search-container">
           <input 
             type="text" 
@@ -1495,6 +1651,21 @@
       <div class="confirm-buttons">
         <button class="btn-cancel" id="confirm-cancel">Cancel</button>
         <button class="btn-confirm" id="confirm-ok">Unsubscribe</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Purge Watched Modal -->
+  <div class="modal-overlay" id="purge-modal" style="display: none;">
+    <div class="modal purge-modal">
+      <div class="modal-header">
+        <h3>Remove Watched Videos</h3>
+        <span class="modal-subtitle" id="purge-count"></span>
+      </div>
+      <div class="purge-list" id="purge-list"></div>
+      <div class="modal-actions">
+        <button class="btn btn-danger" id="purge-confirm">Remove All</button>
+        <button class="btn btn-secondary" id="purge-cancel">Cancel</button>
       </div>
     </div>
   </div>

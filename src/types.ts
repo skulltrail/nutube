@@ -26,7 +26,11 @@
  * - MOVE_TO_PLAYLIST: Move video from Watch Later to another playlist
  *
  * PLAYLIST OPERATIONS:
+ * - GET_PLAYLIST_VIDEOS: Fetch all videos from a specific playlist
  * - ADD_TO_PLAYLIST: Add video to a playlist
+ * - REMOVE_FROM_PLAYLIST: Remove video from a playlist
+ * - CREATE_PLAYLIST: Create a new playlist
+ * - DELETE_PLAYLIST: Delete a playlist
  *
  * SUBSCRIPTION OPERATIONS:
  * - SUBSCRIBE: Subscribe to a channel
@@ -53,4 +57,8 @@ export type MessageType =
   | { type: 'SUBSCRIBE'; channelId: string }
   | { type: 'GET_CHANNEL_SUGGESTIONS'; channelId: string }
   | { type: 'GET_CHANNEL_VIDEOS'; channelId: string }
+  | { type: 'GET_PLAYLIST_VIDEOS'; playlistId: string }
+  | { type: 'REMOVE_FROM_PLAYLIST'; videoId: string; setVideoId: string; playlistId: string }
+  | { type: 'CREATE_PLAYLIST'; title: string }
+  | { type: 'DELETE_PLAYLIST'; playlistId: string }
   | { type: 'PING' };

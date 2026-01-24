@@ -50,6 +50,9 @@ const PENDING_G_TIMEOUT_MS = 500;
 /** Duration to show toast notifications (ms) */
 const TOAST_DURATION_MS = 3000;
 
+/** Time-to-live for stale watched overrides without matching video (ms) */
+const STALE_OVERRIDE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
 /** Duration to show undo toast for channel unsubscribe (ms) */
 const UNDO_TOAST_DURATION_MS = 5000;
 
@@ -107,6 +110,7 @@ let visualModeStart = null;
 let visualBlockMode = false; // true = block mode (V), false = line mode (v)
 let searchQuery = '';
 let modalFocusedIndex = 0;
+let currentModalItems = [];
 let isModalOpen = false;
 let isHelpOpen = false;
 let pendingG = false;
@@ -119,7 +123,7 @@ let channelMap = new Map();
 let playlistMap = new Map();
 
 // Tab state
-let currentTab = 'watchlater'; // 'watchlater', 'subscriptions', or 'channels'
+let currentTab = 'watchlater'; // 'watchlater', 'subscriptions', 'channels', or 'playlists'
 let watchLaterVideos = [];
 let subscriptionVideos = [];
 let channels = [];
@@ -153,6 +157,19 @@ let quickMoveAssignments = {};
 
 // Hide Watch Later items in subscriptions (on by default)
 let hideWatchLaterInSubs = true;
+
+// Watched status overrides (user-set, persisted)
+let watchedOverrides = {};
+
+// Global hide-watched toggle (persisted)
+let hideWatched = false;
+
+// Playlist browser state (two-level drill-down)
+let playlistBrowserLevel = 'list'; // 'list' (Level 1) or 'videos' (Level 2)
+let activePlaylistId = null;
+let activePlaylistTitle = '';
+let playlistVideos = [];
+let filteredPlaylists = [];
 
 // Undo history
 const undoStack = [];
@@ -251,6 +268,11 @@ const confirmOk = document.getElementById('confirm-ok');
 const shortcutsList = document.getElementById('shortcuts-list');
 const subscriptionsLoadingEl = document.getElementById('subscriptions-loading');
 const loadMoreIndicatorEl = document.getElementById('load-more-indicator');
+const hideWatchedIndicatorEl = document.getElementById('hide-watched-indicator');
+const tabPlaylists = document.getElementById('tab-playlists');
+const playlistsCountEl = document.getElementById('playlists-count');
+const breadcrumbEl = document.getElementById('breadcrumb');
+const breadcrumbNameEl = document.getElementById('breadcrumb-name');
 
 // Loading indicator helpers
 function showSubscriptionsLoading() {
@@ -300,6 +322,9 @@ function renderShortcuts() {
           { keys: ['m'], desc: 'Move to playlist' },
           { keys: ['1-9'], desc: 'Quick move' },
           { keys: ['t', 'b'], desc: 'Move top/bottom' },
+          { keys: ['w'], desc: 'Toggle watched' },
+          { keys: ['H'], desc: 'Hide watched' },
+          { keys: ['W'], desc: 'Purge watched' },
           { keys: ['u'], desc: 'Undo' },
         ]
       },
@@ -336,7 +361,8 @@ function renderShortcuts() {
       {
         title: 'Actions',
         shortcuts: [
-          { keys: ['w'], desc: 'Add to Watch Later' },
+          { keys: ['w'], desc: 'Toggle watched' },
+          { keys: ['H'], desc: 'Hide watched' },
           { keys: ['h'], desc: 'Hide video' },
           { keys: ['f'], desc: 'Toggle WL filter' },
           { keys: ['m'], desc: 'Add to playlist' },
@@ -404,6 +430,42 @@ function renderShortcuts() {
         shortcuts: [
           { keys: ['o', '↵'], desc: 'Open channel' },
           { keys: ['y'], desc: 'Copy URL' },
+          { keys: ['r'], desc: 'Refresh' },
+          { keys: ['Tab'], desc: 'Switch tab' },
+          { keys: ['?'], desc: 'Help' },
+        ]
+      },
+    ],
+    playlists: [
+      {
+        title: 'Playlist List',
+        shortcuts: [
+          { keys: ['↵'], desc: 'Open playlist' },
+          { keys: ['n'], desc: 'New playlist' },
+          { keys: ['x', 'd'], desc: 'Delete playlist' },
+        ]
+      },
+      {
+        title: 'Inside Playlist',
+        shortcuts: [
+          { keys: ['x', 'd'], desc: 'Remove from playlist' },
+          { keys: ['w'], desc: 'Toggle watched' },
+          { keys: ['H'], desc: 'Hide watched' },
+          { keys: ['Esc'], desc: 'Back to list' },
+        ]
+      },
+      {
+        title: 'Navigate',
+        shortcuts: [
+          { keys: ['j', 'k'], desc: 'Up/down' },
+          { keys: ['gg', 'G'], desc: 'Top/bottom' },
+          { keys: ['⌃d', '⌃u'], desc: 'Page down/up' },
+          { keys: ['/'], desc: 'Search' },
+        ]
+      },
+      {
+        title: 'Other',
+        shortcuts: [
           { keys: ['r'], desc: 'Refresh' },
           { keys: ['Tab'], desc: 'Switch tab' },
           { keys: ['?'], desc: 'Help' },
@@ -491,6 +553,77 @@ async function saveHideWatchLaterPref() {
   });
 }
 
+// Watched overrides storage
+async function loadWatchedOverrides() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['watchedOverrides'], (result) => {
+      watchedOverrides = result.watchedOverrides || {};
+      resolve();
+    });
+  });
+}
+
+async function saveWatchedOverrides() {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ watchedOverrides }, resolve);
+  });
+}
+
+// Hide watched toggle storage
+async function loadHideWatchedPref() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['hideWatched'], (result) => {
+      hideWatched = result.hideWatched === true;
+      resolve();
+    });
+  });
+}
+
+async function saveHideWatchedPref() {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ hideWatched }, resolve);
+  });
+}
+
+function updateHideWatchedIndicator() {
+  if (hideWatchedIndicatorEl) {
+    hideWatchedIndicatorEl.classList.toggle('active', hideWatched);
+  }
+}
+
+/**
+ * Get the effective watched progress for a video (0-100).
+ * Local overrides take precedence over YouTube's data.
+ */
+function getWatchedProgress(video) {
+  const override = watchedOverrides[video.id];
+  if (override) {
+    return override.watched ? 100 : 0;
+  }
+  return video.progressPercent || 0;
+}
+
+/**
+ * Check if a video is fully watched (100% or override).
+ */
+function isFullyWatched(video) {
+  return getWatchedProgress(video) >= 100;
+}
+
+async function pruneStaleOverrides(loadedVideoIds) {
+  const now = Date.now();
+  const pruned = Object.fromEntries(
+    Object.entries(watchedOverrides).filter(([videoId, entry]) =>
+      loadedVideoIds.has(videoId) || (now - entry.timestamp) <= STALE_OVERRIDE_TTL_MS
+    )
+  );
+  const changed = Object.keys(pruned).length !== Object.keys(watchedOverrides).length;
+  if (changed) {
+    watchedOverrides = pruned;
+    await saveWatchedOverrides();
+  }
+}
+
 /**
  * Toggle the Watch Later filter in subscriptions view
  */
@@ -500,6 +633,18 @@ function toggleHideWatchLater() {
   renderVideos();
   const state = hideWatchLaterInSubs ? 'Hidden' : 'Shown';
   showToast(`Watch Later items: ${state}`, 'success');
+}
+
+/**
+ * Toggle the global hide-watched filter
+ */
+function toggleHideWatched() {
+  hideWatched = !hideWatched;
+  saveHideWatchedPref();
+  updateHideWatchedIndicator();
+  renderVideos();
+  const state = hideWatched ? 'Hiding' : 'Showing';
+  showToast(`${state} watched videos`, 'success');
 }
 
 // Update mode indicator in footer
@@ -577,11 +722,22 @@ function switchTab(tab) {
   tabWatchLater.classList.toggle('active', tab === 'watchlater');
   tabSubscriptions.classList.toggle('active', tab === 'subscriptions');
   tabChannels.classList.toggle('active', tab === 'channels');
+  tabPlaylists.classList.toggle('active', tab === 'playlists');
   renderShortcuts();
+
+  // Hide breadcrumb when leaving playlists tab
+  if (tab !== 'playlists') {
+    breadcrumbEl.style.display = 'none';
+    playlistBrowserLevel = 'list';
+    activePlaylistId = null;
+    activePlaylistTitle = '';
+  }
 
   // Switch data and render
   if (tab === 'channels') {
     renderChannels();
+  } else if (tab === 'playlists') {
+    renderPlaylistBrowser();
   } else {
     if (tab === 'watchlater') {
       videos = watchLaterVideos;
@@ -593,16 +749,146 @@ function switchTab(tab) {
   setStatus('Ready');
 }
 
+// Playlist browser rendering (Level 1)
+function renderPlaylistBrowser() {
+  // Apply search filter to playlists
+  const query = searchQuery.toLowerCase();
+  filteredPlaylists = query
+    ? playlists.filter(p => p.title.toLowerCase().includes(query))
+    : [...playlists];
+
+  // Clamp focusedIndex
+  if (filteredPlaylists.length === 0) {
+    focusedIndex = 0;
+  } else {
+    focusedIndex = Math.min(focusedIndex, filteredPlaylists.length - 1);
+  }
+
+  videoList.innerHTML = filteredPlaylists.map((playlist, index) => {
+    const focused = index === focusedIndex ? 'focused' : '';
+    const thumbnailHtml = playlist.thumbnail
+      ? `<img src="${escapeHtml(playlist.thumbnail)}" alt="">`
+      : `<span class="playlist-thumbnail-placeholder">&#9654;</span>`;
+    return `<div class="playlist-browser-item ${focused}" data-index="${index}">
+      <div class="playlist-thumbnail">${thumbnailHtml}</div>
+      <div class="playlist-info">
+        <div class="playlist-title">${escapeHtml(playlist.title)}</div>
+        <div class="playlist-count">${Number(playlist.videoCount) || 0} videos</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  videoCountEl.textContent = filteredPlaylists.length;
+  videoCountLabelEl.textContent = 'Playlists:';
+  selectedCountEl.textContent = '0';
+
+  // Add click handlers
+  const items = videoList.querySelectorAll('.playlist-browser-item');
+  items.forEach((item, index) => {
+    item.addEventListener('click', () => {
+      focusedIndex = index;
+      drillIntoPlaylist(filteredPlaylists[index]);
+    });
+  });
+
+  // Scroll focused into view
+  const focusedEl = videoList.querySelector('.playlist-browser-item.focused');
+  if (focusedEl) {
+    focusedEl.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+async function drillIntoPlaylist(playlist) {
+  if (!playlist) return;
+
+  activePlaylistId = playlist.id;
+  activePlaylistTitle = playlist.title;
+  playlistBrowserLevel = 'videos';
+
+  // Show breadcrumb
+  breadcrumbEl.style.display = 'flex';
+  breadcrumbNameEl.textContent = playlist.title;
+
+  // Show loading state
+  setStatus(`Loading ${playlist.title}...`, 'loading');
+  videoList.innerHTML = '<div class="loading"><div class="spinner"></div><span>Loading playlist...</span></div>';
+
+  try {
+    const result = await sendMessage({
+      type: 'GET_PLAYLIST_VIDEOS',
+      playlistId: playlist.id,
+    });
+
+    if (result.success) {
+      playlistVideos = result.data || [];
+      videos = playlistVideos;
+      focusedIndex = 0;
+      selectedIndices.clear();
+      searchQuery = '';
+      searchInput.value = '';
+      renderVideos();
+      videoCountLabelEl.textContent = 'Videos:';
+      setStatus('Ready');
+    } else {
+      showToast('Failed to load playlist', 'error');
+      setStatus('Error loading playlist', 'error');
+      drillOutOfPlaylist();
+    }
+  } catch (error) {
+    errorLog('Failed to load playlist:', error);
+    showToast('Failed to load playlist', 'error');
+    setStatus('Error', 'error');
+    drillOutOfPlaylist();
+  }
+}
+
+function drillOutOfPlaylist() {
+  playlistBrowserLevel = 'list';
+  activePlaylistId = null;
+  activePlaylistTitle = '';
+  breadcrumbEl.style.display = 'none';
+  focusedIndex = 0;
+  selectedIndices.clear();
+  searchQuery = '';
+  searchInput.value = '';
+  renderPlaylistBrowser();
+}
+
+/**
+ * Render the appropriate view based on current tab and playlist level.
+ * Used by keyboard navigation handlers to dispatch to the correct render function.
+ */
+function renderCurrentView() {
+  if (currentTab === 'channels') {
+    renderChannels();
+  } else if (currentTab === 'playlists' && playlistBrowserLevel === 'list') {
+    renderPlaylistBrowser();
+  } else {
+    renderVideos();
+  }
+}
+
+/**
+ * Get the maximum valid index for the current view.
+ */
+function getMaxIndex() {
+  if (currentTab === 'channels') return filteredChannels.length - 1;
+  if (currentTab === 'playlists' && playlistBrowserLevel === 'list') return filteredPlaylists.length - 1;
+  return filteredVideos.length - 1;
+}
+
 // Get next tab in cycle
 function getNextTab() {
   if (currentTab === 'watchlater') return 'subscriptions';
   if (currentTab === 'subscriptions') return 'channels';
+  if (currentTab === 'channels') return 'playlists';
   return 'watchlater';
 }
 
 // Get previous tab in cycle (for SHIFT+TAB)
 function getPrevTab() {
-  if (currentTab === 'watchlater') return 'channels';
+  if (currentTab === 'watchlater') return 'playlists';
+  if (currentTab === 'playlists') return 'channels';
   if (currentTab === 'channels') return 'subscriptions';
   return 'watchlater';
 }
@@ -643,6 +929,41 @@ async function addToWatchLater() {
   renderVideos();
   showToast(`Added ${added} video(s) to Watch Later`, added > 0 ? 'success' : 'error');
   setStatus('Ready');
+}
+
+/**
+ * Toggle watched status on focused/selected videos
+ */
+function toggleWatched() {
+  const targets = getTargetVideos();
+  if (targets.length === 0) return;
+
+  let markedCount = 0;
+  let unmarkedCount = 0;
+  const updated = { ...watchedOverrides };
+
+  for (const video of targets) {
+    const currentlyWatched = isFullyWatched(video);
+    if (currentlyWatched) {
+      updated[video.id] = { watched: false, timestamp: Date.now() };
+      unmarkedCount++;
+    } else {
+      updated[video.id] = { watched: true, timestamp: Date.now() };
+      markedCount++;
+    }
+  }
+
+  watchedOverrides = updated;
+  saveWatchedOverrides();
+  renderVideos();
+
+  if (markedCount > 0 && unmarkedCount > 0) {
+    showToast(`${markedCount} marked watched, ${unmarkedCount} unmarked`, 'success');
+  } else if (markedCount > 0) {
+    showToast(`${markedCount} video(s) marked as watched`, 'success');
+  } else {
+    showToast(`${unmarkedCount} video(s) unmarked`, 'success');
+  }
 }
 
 /**
@@ -836,6 +1157,12 @@ function renderVideos() {
   // Base filter: exclude hidden videos
   let baseFilter = v => !hiddenVideoIds.has(v.id);
 
+  // Hide fully-watched videos when toggle is active
+  if (hideWatched) {
+    const origFilter = baseFilter;
+    baseFilter = v => origFilter(v) && !isFullyWatched(v);
+  }
+
   // In subscriptions tab, optionally hide videos already in Watch Later
   if (currentTab === 'subscriptions' && hideWatchLaterInSubs) {
     const origFilter = baseFilter;
@@ -852,23 +1179,23 @@ function renderVideos() {
 
   videoList.innerHTML = filteredVideos.map((video, index) => {
     const inWL = currentTab === 'subscriptions' && isInWatchLater(video.id);
-    const isWatched = video.watched || (video.progressPercent && video.progressPercent >= 90);
+    const progress = getWatchedProgress(video);
+    const fullyWatched = progress >= 100;
     return `
-    <div class="video-item ${selectedIndices.has(index) ? 'selected' : ''} ${focusedIndex === index ? 'focused' : ''} ${isWatched ? 'watched' : ''}"
+    <div class="video-item ${selectedIndices.has(index) ? 'selected' : ''} ${focusedIndex === index ? 'focused' : ''} ${fullyWatched ? 'fully-watched' : ''}"
          data-index="${index}"
          data-video-id="${video.id}">
       <span class="video-index">${index + 1}</span>
       <div class="thumbnail-wrapper">
         <img class="video-thumbnail" src="${fixUrl(video.thumbnail)}" alt="" loading="lazy">
-        ${isWatched ? '<div class="watched-overlay"><span>Watched</span></div>' : ''}
+        ${progress > 0 ? `<div class="video-progress" style="width: ${progress}%"></div>` : ''}
       </div>
       <div class="video-info">
         <div class="video-title" title="${escapeHtml(video.title)}">${escapeHtml(video.title)}</div>
         <div class="video-channel">${escapeHtml(video.channel)}</div>
       </div>
       <div class="video-meta">
-        ${isWatched ? '<span class="badge-watched">Watched</span>' : ''}
-        ${inWL ? '<span class="wl-check" title="In Watch Later">✓</span>' : ''}
+        ${inWL ? '<span class="wl-check" title="In Watch Later">&#10003;</span>' : ''}
         <span class="video-duration">${video.duration || '--:--'}</span>
       </div>
     </div>
@@ -988,7 +1315,14 @@ function getSortedPlaylists() {
 // Render modal playlists
 function renderModalPlaylists() {
   const sortedPlaylists = getSortedPlaylists();
-  modalPlaylists.innerHTML = sortedPlaylists.map((playlist, index) => {
+  // In subscriptions tab, prepend Watch Later as first option
+  const watchLaterEntry = { id: 'WL', title: 'Watch Later', videoCount: watchLaterVideos.length };
+  const modalItems = currentTab === 'subscriptions'
+    ? [watchLaterEntry, ...sortedPlaylists]
+    : sortedPlaylists;
+  currentModalItems = modalItems;
+
+  modalPlaylists.innerHTML = modalItems.map((playlist, index) => {
     const quickMoveNum = getQuickMoveNumber(playlist.id);
     return `
     <div class="modal-playlist ${modalFocusedIndex === index ? 'focused' : ''}"
@@ -1012,7 +1346,9 @@ function renderModalPlaylists() {
     el.addEventListener('click', () => {
       const playlistId = el.dataset.playlistId;
       closeModal();
-      if (currentTab === 'subscriptions') {
+      if (playlistId === 'WL') {
+        addToWatchLater();
+      } else if (currentTab === 'subscriptions') {
         addToPlaylist(playlistId);
       } else {
         moveToPlaylist(playlistId);
@@ -1774,6 +2110,239 @@ async function deleteVideos() {
   });
 }
 
+/**
+ * Delete videos from the currently active playlist (Level 2 view).
+ * Optimistically updates UI then processes API calls in background.
+ */
+async function deleteFromPlaylist() {
+  if (!activePlaylistId) return;
+
+  const targets = getTargetVideos();
+  if (targets.length === 0) return;
+
+  // Optimistically update UI
+  const targetIds = new Set(targets.map(v => v.id));
+  playlistVideos = playlistVideos.filter(v => !targetIds.has(v.id));
+  videos = playlistVideos;
+
+  // Exit visual mode
+  visualModeStart = null;
+  visualBlockMode = false;
+  selectedIndices.clear();
+  updateMode();
+
+  focusedIndex = Math.min(focusedIndex, Math.max(0, videos.length - 1));
+  renderVideos();
+
+  showToast(`Removing ${targets.length} video(s)...`);
+  setStatus(`Removing ${targets.length} video(s)...`, 'loading');
+
+  // Process API calls in background
+  Promise.all(
+    targets.map(video =>
+      sendMessage({
+        type: 'REMOVE_FROM_PLAYLIST',
+        videoId: video.id,
+        setVideoId: video.setVideoId,
+        playlistId: activePlaylistId,
+      }).catch(e => {
+        errorLog('Remove from playlist error:', e);
+        return { success: false, error: String(e) };
+      })
+    )
+  ).then(results => {
+    const errors = results
+      .filter(r => !r.success && r.error)
+      .map(r => r.error);
+    if (errors.length > 0 && !errors.every(e => e.includes('409'))) {
+      warnLog('Remove from playlist had errors:', errors);
+      showToast(`Removed with ${errors.length} error(s)`, 'warning');
+    } else {
+      showToast(`Removed ${targets.length} video(s) from playlist`, 'success');
+    }
+    setStatus('Ready');
+  });
+}
+
+async function createNewPlaylist() {
+  const title = prompt('New playlist name:');
+  if (!title || !title.trim()) return;
+
+  const trimmedTitle = title.trim();
+  setStatus('Creating playlist...', 'loading');
+
+  try {
+    const result = await sendMessage({
+      type: 'CREATE_PLAYLIST',
+      title: trimmedTitle,
+    });
+
+    if (result.success && result.playlistId) {
+      const newPlaylist = {
+        id: result.playlistId,
+        title: trimmedTitle,
+        videoCount: 0,
+      };
+      playlists = [...playlists, newPlaylist];
+      rebuildPlaylistMap();
+      playlistsCountEl.textContent = playlists.length;
+      // Clear search so the new playlist is visible
+      searchQuery = '';
+      searchInput.value = '';
+      focusedIndex = playlists.length - 1;
+      renderPlaylistBrowser();
+      showToast(`Created "${trimmedTitle}"`, 'success');
+    } else {
+      showToast('Failed to create playlist', 'error');
+    }
+  } catch (error) {
+    errorLog('Create playlist error:', error);
+    showToast('Failed to create playlist', 'error');
+  }
+  setStatus('Ready');
+}
+
+async function deleteSelectedPlaylist() {
+  const playlist = filteredPlaylists[focusedIndex];
+  if (!playlist) return;
+
+  const confirmed = confirm(`Delete playlist "${playlist.title}"? This cannot be undone.`);
+  if (!confirmed) return;
+
+  setStatus('Deleting playlist...', 'loading');
+
+  try {
+    const result = await sendMessage({
+      type: 'DELETE_PLAYLIST',
+      playlistId: playlist.id,
+    });
+
+    if (result.success) {
+      playlists = playlists.filter(p => p.id !== playlist.id);
+      rebuildPlaylistMap();
+      playlistsCountEl.textContent = playlists.length;
+      focusedIndex = Math.min(focusedIndex, Math.max(0, playlists.length - 1));
+      renderPlaylistBrowser();
+      showToast(`Deleted "${playlist.title}"`, 'success');
+    } else {
+      showToast('Failed to delete playlist', 'error');
+    }
+  } catch (error) {
+    errorLog('Delete playlist error:', error);
+    showToast('Failed to delete playlist', 'error');
+  }
+  setStatus('Ready');
+}
+
+/**
+ * Open the bulk purge confirmation dialog showing all watched videos
+ */
+function openPurgeDialog() {
+  const purgeModal = document.getElementById('purge-modal');
+  if (purgeModal.style.display === 'flex') return;
+
+  const watchedVideos = videos.filter(v => !hiddenVideoIds.has(v.id) && isFullyWatched(v));
+  if (watchedVideos.length === 0) {
+    showToast('No watched videos to remove', 'info');
+    return;
+  }
+  const purgeList = document.getElementById('purge-list');
+  const purgeCount = document.getElementById('purge-count');
+
+  purgeCount.textContent = `${watchedVideos.length} video(s)`;
+  purgeList.innerHTML = watchedVideos.map(video => {
+    const progress = getWatchedProgress(video);
+    return `
+      <div class="purge-item">
+        <div>
+          <div class="purge-item-title">${escapeHtml(video.title)}</div>
+          <div class="purge-item-channel">${escapeHtml(video.channel)}</div>
+        </div>
+        <div class="purge-item-progress">${progress}%</div>
+      </div>
+    `;
+  }).join('');
+
+  purgeModal.style.display = 'flex';
+
+  const confirmBtn = document.getElementById('purge-confirm');
+  const cancelBtn = document.getElementById('purge-cancel');
+
+  const cleanup = () => {
+    purgeModal.style.display = 'none';
+    confirmBtn.removeEventListener('click', onConfirm);
+    cancelBtn.removeEventListener('click', onCancel);
+    document.removeEventListener('keydown', onKey, true);
+  };
+
+  const onConfirm = () => {
+    cleanup();
+    executePurge(watchedVideos);
+  };
+
+  const onCancel = () => {
+    cleanup();
+  };
+
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      onCancel();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      onConfirm();
+    }
+  };
+
+  confirmBtn.addEventListener('click', onConfirm);
+  cancelBtn.addEventListener('click', onCancel);
+  document.addEventListener('keydown', onKey, true);
+}
+
+/**
+ * Execute the bulk purge — remove all watched videos from Watch Later
+ */
+async function executePurge(watchedVideos) {
+  setStatus(`Removing ${watchedVideos.length} watched videos...`, 'loading');
+
+  const removedVideos = [];
+  let removed = 0;
+
+  for (const video of watchedVideos) {
+    try {
+      const result = await sendMessage({
+        type: 'REMOVE_FROM_WATCH_LATER',
+        videoId: video.id,
+        setVideoId: video.setVideoId,
+      });
+      if (result.success) {
+        removed++;
+        removedVideos.push(video);
+      }
+    } catch (err) {
+      errorLog('Failed to remove video:', video.id, err);
+    }
+  }
+
+  // Remove from local state
+  const removedIds = new Set(removedVideos.map(v => v.id));
+  videos = videos.filter(v => !removedIds.has(v.id));
+  watchLaterVideos = watchLaterVideos.filter(v => !removedIds.has(v.id));
+
+  // Push undo entry using saveUndoState pattern
+  if (removedVideos.length > 0) {
+    saveUndoState('delete', { videos: [...removedVideos] });
+  }
+
+  selectedIndices.clear();
+  renderVideos();
+  // Clamp after renderVideos recomputes filteredVideos
+  focusedIndex = Math.min(focusedIndex, Math.max(0, filteredVideos.length - 1));
+  renderVideos();
+  setStatus(`Removed ${removed} watched video(s)`, 'success');
+  showToast(`Purged ${removed} watched video(s)`, 'success');
+}
+
 async function moveToTop() {
   const targets = getTargetVideos();
   if (targets.length === 0) return;
@@ -2149,11 +2718,7 @@ document.addEventListener('keydown', (e) => {
       searchInput.value = '';
       searchQuery = '';
       searchContainer?.classList.remove('active');
-      if (currentTab === 'channels') {
-        renderChannels();
-      } else {
-        renderVideos();
-      }
+      renderCurrentView();
     } else if (e.key === 'Enter') {
       searchInput.blur();
     }
@@ -2245,12 +2810,11 @@ document.addEventListener('keydown', (e) => {
   // Modal handling
   if (isModalOpen) {
     e.preventDefault();
-    const sortedPlaylists = getSortedPlaylists();
     if (e.key === 'Escape') {
       closeModal();
     } else if (e.key === 'j' || e.key === 'ArrowDown') {
       enableKeyboardNavMode();
-      modalFocusedIndex = Math.min(modalFocusedIndex + 1, sortedPlaylists.length - 1);
+      modalFocusedIndex = Math.min(modalFocusedIndex + 1, currentModalItems.length - 1);
       renderModalPlaylists();
     } else if (e.key === 'k' || e.key === 'ArrowUp') {
       enableKeyboardNavMode();
@@ -2258,16 +2822,19 @@ document.addEventListener('keydown', (e) => {
       renderModalPlaylists();
     } else if (e.key === 'Enter') {
       closeModal();
-      const playlistId = sortedPlaylists[modalFocusedIndex]?.id;
-      if (currentTab === 'subscriptions') {
-        addToPlaylist(playlistId);
+      const item = currentModalItems[modalFocusedIndex];
+      if (!item) return;
+      if (item.id === 'WL') {
+        addToWatchLater();
+      } else if (currentTab === 'subscriptions') {
+        addToPlaylist(item.id);
       } else {
-        moveToPlaylist(playlistId);
+        moveToPlaylist(item.id);
       }
     } else if (e.key >= '1' && e.key <= '9') {
       // Assign quick move number to focused playlist
       const num = e.key;
-      const focusedPlaylist = sortedPlaylists[modalFocusedIndex];
+      const focusedPlaylist = currentModalItems[modalFocusedIndex];
       if (focusedPlaylist) {
         assignQuickMove(num, focusedPlaylist.id);
         showToast(`Assigned ${num} to "${focusedPlaylist.title}"`, 'success');
@@ -2276,7 +2843,7 @@ document.addEventListener('keydown', (e) => {
       }
     } else if (e.key === '0') {
       // Clear quick move assignment from focused playlist
-      const focusedPlaylist = sortedPlaylists[modalFocusedIndex];
+      const focusedPlaylist = currentModalItems[modalFocusedIndex];
       if (focusedPlaylist) {
         const currentNum = getQuickMoveNumber(focusedPlaylist.id);
         if (currentNum) {
@@ -2300,11 +2867,7 @@ document.addEventListener('keydown', (e) => {
       selectedIndices.clear();
       visualModeStart = null;
       visualBlockMode = false;
-      if (currentTab === 'channels') {
-        renderChannels();
-      } else {
-        renderVideos();
-      }
+      renderCurrentView();
       pendingG = false;
     } else {
       pendingG = true;
@@ -2326,6 +2889,12 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     searchInput.focus();
   } else if (e.key === 'Escape') {
+    // Drill out of playlist (takes priority)
+    if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
+      drillOutOfPlaylist();
+      return;
+    }
+
     // Cancel pending unsubscribe confirmation
     if (pendingUnsubscribe) {
       cancelUnsubscribeConfirm();
@@ -2339,18 +2908,14 @@ document.addEventListener('keydown', (e) => {
     searchInput.value = '';
     searchContainer?.classList.remove('active');
     updateMode();
-    if (currentTab === 'channels') {
-      renderChannels();
-    } else {
-      renderVideos();
-    }
+    renderCurrentView();
   } else if (e.key === 'j' || e.key === 'ArrowDown') {
     e.preventDefault();
     enableKeyboardNavMode();
     // Cancel pending unsubscribe confirmation on navigation
     if (pendingUnsubscribe) cancelUnsubscribeConfirm();
 
-    const maxIndex = currentTab === 'channels' ? filteredChannels.length - 1 : filteredVideos.length - 1;
+    const maxIndex = getMaxIndex();
     focusedIndex = Math.min(focusedIndex + 1, maxIndex);
 
     // Only extend selection in Visual Line mode (not Visual Block)
@@ -2358,11 +2923,7 @@ document.addEventListener('keydown', (e) => {
       updateVisualSelection();
     }
 
-    if (currentTab === 'channels') {
-      renderChannels();
-    } else {
-      renderVideos();
-    }
+    renderCurrentView();
   } else if (e.key === 'k' || e.key === 'ArrowUp') {
     e.preventDefault();
     enableKeyboardNavMode();
@@ -2376,15 +2937,11 @@ document.addEventListener('keydown', (e) => {
       updateVisualSelection();
     }
 
-    if (currentTab === 'channels') {
-      renderChannels();
-    } else {
-      renderVideos();
-    }
+    renderCurrentView();
   } else if (e.key === 'v' && e.ctrlKey) {
     // Visual Block mode (Ctrl+V) - non-consecutive multi-select with Space toggle
     e.preventDefault(); // Prevent paste
-    if (currentTab === 'channels') return;
+    if (currentTab === 'channels' || (currentTab === 'playlists' && playlistBrowserLevel === 'list')) return;
     if (visualModeStart === null) {
       visualModeStart = focusedIndex;
       visualBlockMode = true;
@@ -2400,29 +2957,21 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'G') {
     // Go to bottom
     enableKeyboardNavMode();
-    const maxIndex = currentTab === 'channels' ? filteredChannels.length - 1 : filteredVideos.length - 1;
+    const maxIndex = getMaxIndex();
     focusedIndex = maxIndex;
     selectedIndices.clear();
     visualModeStart = null;
     visualBlockMode = false;
-    if (currentTab === 'channels') {
-      renderChannels();
-    } else {
-      renderVideos();
-    }
+    renderCurrentView();
   } else if (e.key === 'd' && e.ctrlKey) {
     // Ctrl+d: half page down (vim-style)
     e.preventDefault();
     enableKeyboardNavMode();
     if (pendingUnsubscribe) cancelUnsubscribeConfirm();
-    const maxIndex = currentTab === 'channels' ? filteredChannels.length - 1 : filteredVideos.length - 1;
+    const maxIndex = getMaxIndex();
     const pageSize = Math.floor(window.innerHeight / VIDEO_ITEM_HEIGHT_PX / 2); // ~half visible items
     focusedIndex = Math.min(focusedIndex + pageSize, maxIndex);
-    if (currentTab === 'channels') {
-      renderChannels();
-    } else {
-      renderVideos();
-    }
+    renderCurrentView();
   } else if (e.key === 'u' && e.ctrlKey) {
     // Ctrl+u: half page up (vim-style)
     e.preventDefault();
@@ -2430,11 +2979,7 @@ document.addEventListener('keydown', (e) => {
     if (pendingUnsubscribe) cancelUnsubscribeConfirm();
     const pageSize = Math.floor(window.innerHeight / VIDEO_ITEM_HEIGHT_PX / 2);
     focusedIndex = Math.max(focusedIndex - pageSize, 0);
-    if (currentTab === 'channels') {
-      renderChannels();
-    } else {
-      renderVideos();
-    }
+    renderCurrentView();
   } else if (e.key === ' ') {
     e.preventDefault();
     // In Visual Block mode: toggle selection for non-consecutive multi-select
@@ -2462,8 +3007,8 @@ document.addEventListener('keydown', (e) => {
       }
     }
   } else if (e.key === 'v' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
-    // Visual Line mode (not for channels) - range selection with j/k
-    if (currentTab === 'channels') return;
+    // Visual Line mode (not for channels/playlist list) - range selection with j/k
+    if (currentTab === 'channels' || (currentTab === 'playlists' && playlistBrowserLevel === 'list')) return;
     if (visualModeStart === null) {
       visualModeStart = focusedIndex;
       visualBlockMode = false;
@@ -2490,15 +3035,33 @@ document.addEventListener('keydown', (e) => {
     // Cycle through tabs (SHIFT+TAB goes backwards)
     e.preventDefault();
     switchTab(e.shiftKey ? getPrevTab() : getNextTab());
-  } else if (e.key === 'w') {
-    // Add to Watch Later (subscriptions tab only)
-    if (currentTab === 'subscriptions') {
-      addToWatchLater();
+  } else if (e.key === 'w' && !e.shiftKey) {
+    // Toggle watched status (video views only, not playlist list)
+    if (currentTab !== 'channels' && !(currentTab === 'playlists' && playlistBrowserLevel === 'list')) {
+      toggleWatched();
+    }
+  } else if (e.key === 'H') {
+    // Toggle hide watched (global)
+    toggleHideWatched();
+  } else if (e.key === 'W') {
+    // Bulk purge watched videos
+    if (currentTab === 'watchlater') {
+      openPurgeDialog();
+    } else {
+      showToast('Bulk purge only available in Watch Later', 'info');
+    }
+  } else if (e.key === 'n') {
+    if (currentTab === 'playlists' && playlistBrowserLevel === 'list') {
+      createNewPlaylist();
     }
   } else if (e.key === 'x' || e.key === 'd' || e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
     if (currentTab === 'watchlater') {
       deleteVideos();
+    } else if (currentTab === 'playlists' && playlistBrowserLevel === 'list') {
+      deleteSelectedPlaylist();
+    } else if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
+      deleteFromPlaylist();
     } else if (currentTab === 'channels') {
       // Unsubscribe from focused channel
       const channel = filteredChannels[focusedIndex];
@@ -2525,20 +3088,31 @@ document.addEventListener('keydown', (e) => {
     if (currentTab === 'watchlater') {
       const playlist = getPlaylistByQuickMove(e.key);
       if (playlist) {
-        moveToPlaylist(playlist.id);
+        if (playlist.id === 'WL') {
+          showToast('Cannot move from Watch Later to Watch Later', 'info');
+        } else {
+          moveToPlaylist(playlist.id);
+        }
       } else {
         showToast(`No playlist assigned to ${e.key}. Press m to assign.`, 'info');
       }
     } else if (currentTab === 'subscriptions') {
       const playlist = getPlaylistByQuickMove(e.key);
       if (playlist) {
-        addToPlaylist(playlist.id);
+        if (playlist.id === 'WL') {
+          addToWatchLater();
+        } else {
+          addToPlaylist(playlist.id);
+        }
       } else {
         showToast(`No playlist assigned to ${e.key}. Press m to assign.`, 'info');
       }
     }
   } else if (e.key === 'Enter') {
-    if (currentTab === 'channels') {
+    if (currentTab === 'playlists' && playlistBrowserLevel === 'list') {
+      const playlist = filteredPlaylists[focusedIndex];
+      if (playlist) drillIntoPlaylist(playlist);
+    } else if (currentTab === 'channels') {
       const channel = filteredChannels[focusedIndex];
       if (channel) {
         window.open(`https://www.youtube.com/channel/${channel.id}`, '_blank');
@@ -2650,11 +3224,7 @@ searchInput.addEventListener('input', (e) => {
     searchContainer?.classList.remove('active');
   }
 
-  if (currentTab === 'channels') {
-    renderChannels();
-  } else {
-    renderVideos();
-  }
+  renderCurrentView();
 });
 
 // Load data for current tab
@@ -2753,6 +3323,8 @@ async function loadAllData() {
       loadQuickMoveAssignments(),
       loadHiddenVideos(),
       loadHideWatchLaterPref(),
+      loadWatchedOverrides(),
+      loadHideWatchedPref(),
     ]);
 
     if (wlResult.success) {
@@ -2770,6 +3342,7 @@ async function loadAllData() {
     if (playlistsResult.success) {
       playlists = playlistsResult.data;
       rebuildPlaylistMap();
+      playlistsCountEl.textContent = playlists.length;
       renderPlaylists();
     }
 
@@ -2785,12 +3358,22 @@ async function loadAllData() {
       applyChannelActivity(channels, activityMap);
     }
 
+    updateHideWatchedIndicator();
+
     // Set current tab's data
     if (currentTab === 'channels') {
       renderChannels();
+    } else if (currentTab === 'playlists') {
+      renderPlaylistBrowser();
     } else {
       videos = currentTab === 'watchlater' ? watchLaterVideos : subscriptionVideos;
       renderVideos();
+    }
+
+    // Prune stale watched overrides only if both data sources loaded
+    if (watchLaterVideos.length > 0 || subscriptionVideos.length > 0) {
+      const allLoadedIds = new Set([...watchLaterVideos, ...subscriptionVideos].map(v => v.id));
+      await pruneStaleOverrides(allLoadedIds);
     }
 
     setStatus('Ready');
@@ -2808,6 +3391,14 @@ async function loadAllData() {
 tabWatchLater.addEventListener('click', () => switchTab('watchlater'));
 tabSubscriptions.addEventListener('click', () => switchTab('subscriptions'));
 tabChannels.addEventListener('click', () => switchTab('channels'));
+tabPlaylists.addEventListener('click', () => switchTab('playlists'));
+
+// Breadcrumb click to return to playlist list
+breadcrumbEl?.querySelector('.breadcrumb-root')?.addEventListener('click', () => {
+  if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
+    drillOutOfPlaylist();
+  }
+});
 
 // Confirm modal button handlers
 confirmCancel.addEventListener('click', () => closeConfirm());
