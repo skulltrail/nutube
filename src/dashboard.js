@@ -2128,6 +2128,76 @@ async function deleteFromPlaylist() {
   });
 }
 
+async function createNewPlaylist() {
+  const title = prompt('New playlist name:');
+  if (!title || !title.trim()) return;
+
+  const trimmedTitle = title.trim();
+  setStatus('Creating playlist...', 'loading');
+
+  try {
+    const result = await sendMessage({
+      type: 'CREATE_PLAYLIST',
+      title: trimmedTitle,
+    });
+
+    if (result.success && result.playlistId) {
+      const newPlaylist = {
+        id: result.playlistId,
+        title: trimmedTitle,
+        videoCount: 0,
+      };
+      playlists = [...playlists, newPlaylist];
+      rebuildPlaylistMap();
+      playlistsCountEl.textContent = playlists.length;
+      // Clear search so the new playlist is visible
+      searchQuery = '';
+      searchInput.value = '';
+      focusedIndex = playlists.length - 1;
+      renderPlaylistBrowser();
+      showToast(`Created "${trimmedTitle}"`, 'success');
+    } else {
+      showToast('Failed to create playlist', 'error');
+    }
+  } catch (error) {
+    errorLog('Create playlist error:', error);
+    showToast('Failed to create playlist', 'error');
+  }
+  setStatus('Ready');
+}
+
+async function deleteSelectedPlaylist() {
+  const playlist = filteredPlaylists[focusedIndex];
+  if (!playlist) return;
+
+  const confirmed = confirm(`Delete playlist "${playlist.title}"? This cannot be undone.`);
+  if (!confirmed) return;
+
+  setStatus('Deleting playlist...', 'loading');
+
+  try {
+    const result = await sendMessage({
+      type: 'DELETE_PLAYLIST',
+      playlistId: playlist.id,
+    });
+
+    if (result.success) {
+      playlists = playlists.filter(p => p.id !== playlist.id);
+      rebuildPlaylistMap();
+      playlistsCountEl.textContent = playlists.length;
+      focusedIndex = Math.min(focusedIndex, Math.max(0, playlists.length - 1));
+      renderPlaylistBrowser();
+      showToast(`Deleted "${playlist.title}"`, 'success');
+    } else {
+      showToast('Failed to delete playlist', 'error');
+    }
+  } catch (error) {
+    errorLog('Delete playlist error:', error);
+    showToast('Failed to delete playlist', 'error');
+  }
+  setStatus('Ready');
+}
+
 /**
  * Open the bulk purge confirmation dialog showing all watched videos
  */
@@ -2944,10 +3014,16 @@ document.addEventListener('keydown', (e) => {
     } else {
       showToast('Bulk purge only available in Watch Later', 'info');
     }
+  } else if (e.key === 'n') {
+    if (currentTab === 'playlists' && playlistBrowserLevel === 'list') {
+      createNewPlaylist();
+    }
   } else if (e.key === 'x' || e.key === 'd' || e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
     if (currentTab === 'watchlater') {
       deleteVideos();
+    } else if (currentTab === 'playlists' && playlistBrowserLevel === 'list') {
+      deleteSelectedPlaylist();
     } else if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
       deleteFromPlaylist();
     } else if (currentTab === 'channels') {
