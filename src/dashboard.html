@@ -25,13 +25,17 @@
       --warning: #ffaa44;
       --font-mono: 'JetBrains Mono', monospace;
       --font-sans: 'Space Grotesk', sans-serif;
-      --ui-scale: 1;
     }
 
     * {
       margin: 0;
       padding: 0;
       box-sizing: border-box;
+    }
+
+    html {
+      overflow: hidden;
+      height: 100%;
     }
 
     /* Global focus-visible for accessibility */
@@ -44,7 +48,7 @@
       background: var(--bg-primary);
       color: var(--text-primary);
       font-family: var(--font-mono);
-      font-size: calc(13px * var(--ui-scale));
+      font-size: 13px;
       line-height: 1.5;
       min-height: 100vh;
       overflow: hidden;
@@ -57,6 +61,7 @@
       height: 100vh;
       max-width: 1400px;
       margin: 0 auto;
+      overflow: hidden;
     }
 
     /* Header */
@@ -182,10 +187,10 @@
 
     .video-item {
       display: grid;
-      grid-template-columns: calc(32px * var(--ui-scale)) calc(120px * var(--ui-scale)) 1fr auto;
-      gap: calc(12px * var(--ui-scale));
+      grid-template-columns: 32px 120px 1fr auto;
+      gap: 12px;
       align-items: center;
-      padding: calc(8px * var(--ui-scale)) calc(12px * var(--ui-scale));
+      padding: 8px 12px;
       border-radius: 4px;
       cursor: pointer;
       transition: background 0.1s;
@@ -214,8 +219,8 @@
     }
 
     .video-thumbnail {
-      width: calc(120px * var(--ui-scale));
-      height: calc(68px * var(--ui-scale));
+      width: 120px;
+      height: 68px;
       border-radius: 4px;
       object-fit: cover;
       background: var(--bg-tertiary);
@@ -270,8 +275,8 @@
     /* Thumbnail wrapper for overlays */
     .thumbnail-wrapper {
       position: relative;
-      width: calc(120px * var(--ui-scale));
-      height: calc(68px * var(--ui-scale));
+      width: 120px;
+      height: 68px;
       flex-shrink: 0;
     }
 
@@ -1326,6 +1331,17 @@
       color: var(--text-muted);
       font-size: 13px;
     }
+
+    /* Help modal section headers */
+    .help-section-title {
+      color: var(--text-muted);
+      font-size: 11px;
+      margin-bottom: 8px;
+    }
+
+    .help-section-title.with-margin-top {
+      margin: 16px 0 8px;
+    }
   </style>
 </head>
 <body tabindex="-1">
@@ -1422,7 +1438,7 @@
       <h2>Keyboard Shortcuts</h2>
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
         <div>
-          <h4 style="color: var(--text-muted); font-size: 11px; margin-bottom: 8px;">NAVIGATION</h4>
+          <h4 class="help-section-title">NAVIGATION</h4>
           <div class="shortcuts">
             <div class="shortcut"><span class="key">j</span><span class="key">↓</span><span class="shortcut-desc">Move down</span></div>
             <div class="shortcut"><span class="key">k</span><span class="key">↑</span><span class="shortcut-desc">Move up</span></div>
@@ -1430,7 +1446,7 @@
             <div class="shortcut"><span class="key">G</span><span class="shortcut-desc">Go to bottom</span></div>
             <div class="shortcut"><span class="key">/</span><span class="shortcut-desc">Search</span></div>
           </div>
-          <h4 style="color: var(--text-muted); font-size: 11px; margin: 16px 0 8px;">SELECTION</h4>
+          <h4 class="help-section-title with-margin-top">SELECTION</h4>
           <div class="shortcuts">
             <div class="shortcut"><span class="key">Space</span><span class="shortcut-desc">Select / Toggle WL</span></div>
             <div class="shortcut"><span class="key">v</span><span class="shortcut-desc">Visual mode</span></div>
@@ -1439,7 +1455,7 @@
           </div>
         </div>
         <div>
-          <h4 style="color: var(--text-muted); font-size: 11px; margin-bottom: 8px;">ACTIONS</h4>
+          <h4 class="help-section-title">ACTIONS</h4>
           <div class="shortcuts">
             <div class="shortcut"><span class="key">x</span><span class="key">d</span><span class="key">Del</span><span class="shortcut-desc">Delete</span></div>
             <div class="shortcut"><span class="key">t</span><span class="shortcut-desc">Move to top</span></div>
@@ -1448,7 +1464,7 @@
             <div class="shortcut"><span class="key">1-9</span><span class="shortcut-desc">Quick move</span></div>
             <div class="shortcut"><span class="key">z</span><span class="shortcut-desc">Undo</span></div>
           </div>
-          <h4 style="color: var(--text-muted); font-size: 11px; margin: 16px 0 8px;">OTHER</h4>
+          <h4 class="help-section-title with-margin-top">OTHER</h4>
           <div class="shortcuts">
             <div class="shortcut"><span class="key">Tab</span><span class="shortcut-desc">Switch tabs</span></div>
             <div class="shortcut"><span class="key">w</span><span class="shortcut-desc">Add to Watch Later</span></div>
