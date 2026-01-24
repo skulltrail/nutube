@@ -260,6 +260,7 @@ const confirmOk = document.getElementById('confirm-ok');
 const shortcutsList = document.getElementById('shortcuts-list');
 const subscriptionsLoadingEl = document.getElementById('subscriptions-loading');
 const loadMoreIndicatorEl = document.getElementById('load-more-indicator');
+const hideWatchedIndicatorEl = document.getElementById('hide-watched-indicator');
 
 // Loading indicator helpers
 function showSubscriptionsLoading() {
@@ -530,6 +531,12 @@ async function saveHideWatchedPref() {
   return new Promise((resolve) => {
     chrome.storage.local.set({ hideWatched }, resolve);
   });
+}
+
+function updateHideWatchedIndicator() {
+  if (hideWatchedIndicatorEl) {
+    hideWatchedIndicatorEl.classList.toggle('active', hideWatched);
+  }
 }
 
 /**
@@ -2866,6 +2873,8 @@ async function loadAllData() {
       const activityMap = deriveChannelActivity(subscriptionVideos);
       applyChannelActivity(channels, activityMap);
     }
+
+    updateHideWatchedIndicator();
 
     // Set current tab's data
     if (currentTab === 'channels') {
