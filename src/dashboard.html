@@ -313,6 +313,33 @@
       display: inline;
     }
 
+    /* Breadcrumb navigation */
+    .breadcrumb {
+      padding: 8px 16px;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .breadcrumb-root {
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+
+    .breadcrumb-root:hover {
+      color: var(--text-secondary);
+    }
+
+    .breadcrumb-separator {
+      color: var(--text-muted);
+    }
+
+    .breadcrumb-current {
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+
     /* Mode indicator in footer */
     .mode-indicator {
       font-weight: 700;
@@ -1419,6 +1446,9 @@
         <button class="nav-tab" data-tab="channels" id="tab-channels">
           Channels<span class="tab-count" id="channels-count">-</span>
         </button>
+        <button class="nav-tab" data-tab="playlists" id="tab-playlists">
+          Playlists<span class="tab-count" id="playlists-count">-</span>
+        </button>
       </nav>
       <div class="stats">
         <div class="stat">
@@ -1437,6 +1467,11 @@
 
     <main>
       <div class="video-list-wrapper">
+        <div class="breadcrumb" id="breadcrumb" style="display: none;">
+          <span class="breadcrumb-root">Playlists</span>
+          <span class="breadcrumb-separator">&gt;</span>
+          <span class="breadcrumb-current" id="breadcrumb-name"></span>
+        </div>
         <div class="search-container">
           <input 
             type="text" 

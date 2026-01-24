@@ -123,7 +123,7 @@ let channelMap = new Map();
 let playlistMap = new Map();
 
 // Tab state
-let currentTab = 'watchlater'; // 'watchlater', 'subscriptions', or 'channels'
+let currentTab = 'watchlater'; // 'watchlater', 'subscriptions', 'channels', or 'playlists'
 let watchLaterVideos = [];
 let subscriptionVideos = [];
 let channels = [];
@@ -163,6 +163,13 @@ let watchedOverrides = {};
 
 // Global hide-watched toggle (persisted)
 let hideWatched = false;
+
+// Playlist browser state (two-level drill-down)
+let playlistBrowserLevel = 'list'; // 'list' (Level 1) or 'videos' (Level 2)
+let activePlaylistId = null;
+let activePlaylistTitle = '';
+let playlistVideos = [];
+let filteredPlaylists = [];
 
 // Undo history
 const undoStack = [];
@@ -262,6 +269,10 @@ const shortcutsList = document.getElementById('shortcuts-list');
 const subscriptionsLoadingEl = document.getElementById('subscriptions-loading');
 const loadMoreIndicatorEl = document.getElementById('load-more-indicator');
 const hideWatchedIndicatorEl = document.getElementById('hide-watched-indicator');
+const tabPlaylists = document.getElementById('tab-playlists');
+const playlistsCountEl = document.getElementById('playlists-count');
+const breadcrumbEl = document.getElementById('breadcrumb');
+const breadcrumbNameEl = document.getElementById('breadcrumb-name');
 
 // Loading indicator helpers
 function showSubscriptionsLoading() {
@@ -675,11 +686,22 @@ function switchTab(tab) {
   tabWatchLater.classList.toggle('active', tab === 'watchlater');
   tabSubscriptions.classList.toggle('active', tab === 'subscriptions');
   tabChannels.classList.toggle('active', tab === 'channels');
+  tabPlaylists.classList.toggle('active', tab === 'playlists');
   renderShortcuts();
+
+  // Hide breadcrumb when leaving playlists tab
+  if (tab !== 'playlists') {
+    breadcrumbEl.style.display = 'none';
+    playlistBrowserLevel = 'list';
+    activePlaylistId = null;
+    activePlaylistTitle = '';
+  }
 
   // Switch data and render
   if (tab === 'channels') {
     renderChannels();
+  } else if (tab === 'playlists') {
+    renderPlaylistBrowser();
   } else {
     if (tab === 'watchlater') {
       videos = watchLaterVideos;
@@ -691,16 +713,53 @@ function switchTab(tab) {
   setStatus('Ready');
 }
 
+// Playlist browser rendering (Level 1)
+function renderPlaylistBrowser() {
+  // Apply search filter to playlists
+  const query = searchQuery.toLowerCase();
+  filteredPlaylists = query
+    ? playlists.filter(p => p.title.toLowerCase().includes(query))
+    : [...playlists];
+
+  videoList.innerHTML = filteredPlaylists.map((playlist, index) => {
+    const focused = index === focusedIndex ? 'focused' : '';
+    return `<div class="video-item ${focused}" data-index="${index}">
+      <div class="video-info">
+        <div class="video-title">${escapeHtml(playlist.title)}</div>
+        <div class="video-channel">${playlist.videoCount} videos</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  videoCountEl.textContent = filteredPlaylists.length;
+  videoCountLabelEl.textContent = 'Playlists:';
+  selectedCountEl.textContent = '0';
+}
+
+function drillOutOfPlaylist() {
+  playlistBrowserLevel = 'list';
+  activePlaylistId = null;
+  activePlaylistTitle = '';
+  breadcrumbEl.style.display = 'none';
+  focusedIndex = 0;
+  selectedIndices.clear();
+  searchQuery = '';
+  searchInput.value = '';
+  renderPlaylistBrowser();
+}
+
 // Get next tab in cycle
 function getNextTab() {
   if (currentTab === 'watchlater') return 'subscriptions';
   if (currentTab === 'subscriptions') return 'channels';
+  if (currentTab === 'channels') return 'playlists';
   return 'watchlater';
 }
 
 // Get previous tab in cycle (for SHIFT+TAB)
 function getPrevTab() {
-  if (currentTab === 'watchlater') return 'channels';
+  if (currentTab === 'watchlater') return 'playlists';
+  if (currentTab === 'playlists') return 'channels';
   if (currentTab === 'channels') return 'subscriptions';
   return 'watchlater';
 }
@@ -3049,6 +3108,7 @@ async function loadAllData() {
     if (playlistsResult.success) {
       playlists = playlistsResult.data;
       rebuildPlaylistMap();
+      playlistsCountEl.textContent = playlists.length;
       renderPlaylists();
     }
 
@@ -3069,6 +3129,8 @@ async function loadAllData() {
     // Set current tab's data
     if (currentTab === 'channels') {
       renderChannels();
+    } else if (currentTab === 'playlists') {
+      renderPlaylistBrowser();
     } else {
       videos = currentTab === 'watchlater' ? watchLaterVideos : subscriptionVideos;
       renderVideos();
@@ -3095,6 +3157,14 @@ async function loadAllData() {
 tabWatchLater.addEventListener('click', () => switchTab('watchlater'));
 tabSubscriptions.addEventListener('click', () => switchTab('subscriptions'));
 tabChannels.addEventListener('click', () => switchTab('channels'));
+tabPlaylists.addEventListener('click', () => switchTab('playlists'));
+
+// Breadcrumb click to return to playlist list
+breadcrumbEl?.querySelector('.breadcrumb-root')?.addEventListener('click', () => {
+  if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
+    drillOutOfPlaylist();
+  }
+});
 
 // Confirm modal button handlers
 confirmCancel.addEventListener('click', () => closeConfirm());
