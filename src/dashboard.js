@@ -436,6 +436,42 @@ function renderShortcuts() {
         ]
       },
     ],
+    playlists: [
+      {
+        title: 'Playlist List',
+        shortcuts: [
+          { keys: ['↵'], desc: 'Open playlist' },
+          { keys: ['n'], desc: 'New playlist' },
+          { keys: ['x', 'd'], desc: 'Delete playlist' },
+        ]
+      },
+      {
+        title: 'Inside Playlist',
+        shortcuts: [
+          { keys: ['x', 'd'], desc: 'Remove from playlist' },
+          { keys: ['w'], desc: 'Toggle watched' },
+          { keys: ['H'], desc: 'Hide watched' },
+          { keys: ['Esc'], desc: 'Back to list' },
+        ]
+      },
+      {
+        title: 'Navigate',
+        shortcuts: [
+          { keys: ['j', 'k'], desc: 'Up/down' },
+          { keys: ['gg', 'G'], desc: 'Top/bottom' },
+          { keys: ['⌃d', '⌃u'], desc: 'Page down/up' },
+          { keys: ['/'], desc: 'Search' },
+        ]
+      },
+      {
+        title: 'Other',
+        shortcuts: [
+          { keys: ['r'], desc: 'Refresh' },
+          { keys: ['Tab'], desc: 'Switch tab' },
+          { keys: ['?'], desc: 'Help' },
+        ]
+      },
+    ],
   };
 
   const tabCategories = categories[currentTab] || categories.watchlater;
