@@ -584,6 +584,18 @@ function toggleHideWatchLater() {
   showToast(`Watch Later items: ${state}`, 'success');
 }
 
+/**
+ * Toggle the global hide-watched filter
+ */
+function toggleHideWatched() {
+  hideWatched = !hideWatched;
+  saveHideWatchedPref();
+  updateHideWatchedIndicator();
+  renderVideos();
+  const state = hideWatched ? 'Hiding' : 'Showing';
+  showToast(`${state} watched videos`, 'success');
+}
+
 // Update mode indicator in footer
 function updateMode() {
   if (modeIndicatorEl) {
@@ -2627,6 +2639,9 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'w' && !e.shiftKey) {
     // Toggle watched status
     toggleWatched();
+  } else if (e.key === 'H') {
+    // Toggle hide watched (global)
+    toggleHideWatched();
   } else if (e.key === 'x' || e.key === 'd' || e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
     if (currentTab === 'watchlater') {
