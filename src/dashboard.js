@@ -2478,8 +2478,8 @@ document.addEventListener('keydown', (e) => {
     updateMode();
     renderVideos();
     setStatus(visualModeStart !== null ? 'Visual Block: Space toggle, j/k move, Esc exit' : 'Ready');
-  } else if (e.key === 'G' && !e.shiftKey) {
-    // Go to bottom (plain G without shift)
+  } else if (e.key === 'G') {
+    // Go to bottom
     enableKeyboardNavMode();
     const maxIndex = currentTab === 'channels' ? filteredChannels.length - 1 : filteredVideos.length - 1;
     focusedIndex = maxIndex;
