@@ -818,6 +818,29 @@ function drillOutOfPlaylist() {
   renderPlaylistBrowser();
 }
 
+/**
+ * Render the appropriate view based on current tab and playlist level.
+ * Used by keyboard navigation handlers to dispatch to the correct render function.
+ */
+function renderCurrentView() {
+  if (currentTab === 'channels') {
+    renderChannels();
+  } else if (currentTab === 'playlists' && playlistBrowserLevel === 'list') {
+    renderPlaylistBrowser();
+  } else {
+    renderVideos();
+  }
+}
+
+/**
+ * Get the maximum valid index for the current view.
+ */
+function getMaxIndex() {
+  if (currentTab === 'channels') return filteredChannels.length - 1;
+  if (currentTab === 'playlists' && playlistBrowserLevel === 'list') return filteredPlaylists.length - 1;
+  return filteredVideos.length - 1;
+}
+
 // Get next tab in cycle
 function getNextTab() {
   if (currentTab === 'watchlater') return 'subscriptions';
@@ -2052,6 +2075,60 @@ async function deleteVideos() {
 }
 
 /**
+ * Delete videos from the currently active playlist (Level 2 view).
+ * Optimistically updates UI then processes API calls in background.
+ */
+async function deleteFromPlaylist() {
+  if (!activePlaylistId) return;
+
+  const targets = getTargetVideos();
+  if (targets.length === 0) return;
+
+  // Optimistically update UI
+  const targetIds = new Set(targets.map(v => v.id));
+  playlistVideos = playlistVideos.filter(v => !targetIds.has(v.id));
+  videos = playlistVideos;
+
+  // Exit visual mode
+  visualModeStart = null;
+  visualBlockMode = false;
+  selectedIndices.clear();
+  updateMode();
+
+  focusedIndex = Math.min(focusedIndex, Math.max(0, videos.length - 1));
+  renderVideos();
+
+  showToast(`Removing ${targets.length} video(s)...`);
+  setStatus(`Removing ${targets.length} video(s)...`, 'loading');
+
+  // Process API calls in background
+  Promise.all(
+    targets.map(video =>
+      sendMessage({
+        type: 'REMOVE_FROM_PLAYLIST',
+        videoId: video.id,
+        setVideoId: video.setVideoId,
+        playlistId: activePlaylistId,
+      }).catch(e => {
+        errorLog('Remove from playlist error:', e);
+        return { success: false, error: String(e) };
+      })
+    )
+  ).then(results => {
+    const errors = results
+      .filter(r => !r.success && r.error)
+      .map(r => r.error);
+    if (errors.length > 0 && !errors.every(e => e.includes('409'))) {
+      warnLog('Remove from playlist had errors:', errors);
+      showToast(`Removed with ${errors.length} error(s)`, 'warning');
+    } else {
+      showToast(`Removed ${targets.length} video(s) from playlist`, 'success');
+    }
+    setStatus('Ready');
+  });
+}
+
+/**
  * Open the bulk purge confirmation dialog showing all watched videos
  */
 function openPurgeDialog() {
@@ -2535,11 +2612,7 @@ document.addEventListener('keydown', (e) => {
       searchInput.value = '';
       searchQuery = '';
       searchContainer?.classList.remove('active');
-      if (currentTab === 'channels') {
-        renderChannels();
-      } else {
-        renderVideos();
-      }
+      renderCurrentView();
     } else if (e.key === 'Enter') {
       searchInput.blur();
     }
@@ -2688,11 +2761,7 @@ document.addEventListener('keydown', (e) => {
       selectedIndices.clear();
       visualModeStart = null;
       visualBlockMode = false;
-      if (currentTab === 'channels') {
-        renderChannels();
-      } else {
-        renderVideos();
-      }
+      renderCurrentView();
       pendingG = false;
     } else {
       pendingG = true;
@@ -2714,6 +2783,12 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     searchInput.focus();
   } else if (e.key === 'Escape') {
+    // Drill out of playlist (takes priority)
+    if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
+      drillOutOfPlaylist();
+      return;
+    }
+
     // Cancel pending unsubscribe confirmation
     if (pendingUnsubscribe) {
       cancelUnsubscribeConfirm();
@@ -2727,18 +2802,14 @@ document.addEventListener('keydown', (e) => {
     searchInput.value = '';
     searchContainer?.classList.remove('active');
     updateMode();
-    if (currentTab === 'channels') {
-      renderChannels();
-    } else {
-      renderVideos();
-    }
+    renderCurrentView();
   } else if (e.key === 'j' || e.key === 'ArrowDown') {
     e.preventDefault();
     enableKeyboardNavMode();
     // Cancel pending unsubscribe confirmation on navigation
     if (pendingUnsubscribe) cancelUnsubscribeConfirm();
 
-    const maxIndex = currentTab === 'channels' ? filteredChannels.length - 1 : filteredVideos.length - 1;
+    const maxIndex = getMaxIndex();
     focusedIndex = Math.min(focusedIndex + 1, maxIndex);
 
     // Only extend selection in Visual Line mode (not Visual Block)
@@ -2746,11 +2817,7 @@ document.addEventListener('keydown', (e) => {
       updateVisualSelection();
     }
 
-    if (currentTab === 'channels') {
-      renderChannels();
-    } else {
-      renderVideos();
-    }
+    renderCurrentView();
   } else if (e.key === 'k' || e.key === 'ArrowUp') {
     e.preventDefault();
     enableKeyboardNavMode();
@@ -2764,11 +2831,7 @@ document.addEventListener('keydown', (e) => {
       updateVisualSelection();
     }
 
-    if (currentTab === 'channels') {
-      renderChannels();
-    } else {
-      renderVideos();
-    }
+    renderCurrentView();
   } else if (e.key === 'v' && e.ctrlKey) {
     // Visual Block mode (Ctrl+V) - non-consecutive multi-select with Space toggle
     e.preventDefault(); // Prevent paste
@@ -2788,29 +2851,21 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'G') {
     // Go to bottom
     enableKeyboardNavMode();
-    const maxIndex = currentTab === 'channels' ? filteredChannels.length - 1 : filteredVideos.length - 1;
+    const maxIndex = getMaxIndex();
     focusedIndex = maxIndex;
     selectedIndices.clear();
     visualModeStart = null;
     visualBlockMode = false;
-    if (currentTab === 'channels') {
-      renderChannels();
-    } else {
-      renderVideos();
-    }
+    renderCurrentView();
   } else if (e.key === 'd' && e.ctrlKey) {
     // Ctrl+d: half page down (vim-style)
     e.preventDefault();
     enableKeyboardNavMode();
     if (pendingUnsubscribe) cancelUnsubscribeConfirm();
-    const maxIndex = currentTab === 'channels' ? filteredChannels.length - 1 : filteredVideos.length - 1;
+    const maxIndex = getMaxIndex();
     const pageSize = Math.floor(window.innerHeight / VIDEO_ITEM_HEIGHT_PX / 2); // ~half visible items
     focusedIndex = Math.min(focusedIndex + pageSize, maxIndex);
-    if (currentTab === 'channels') {
-      renderChannels();
-    } else {
-      renderVideos();
-    }
+    renderCurrentView();
   } else if (e.key === 'u' && e.ctrlKey) {
     // Ctrl+u: half page up (vim-style)
     e.preventDefault();
@@ -2818,11 +2873,7 @@ document.addEventListener('keydown', (e) => {
     if (pendingUnsubscribe) cancelUnsubscribeConfirm();
     const pageSize = Math.floor(window.innerHeight / VIDEO_ITEM_HEIGHT_PX / 2);
     focusedIndex = Math.max(focusedIndex - pageSize, 0);
-    if (currentTab === 'channels') {
-      renderChannels();
-    } else {
-      renderVideos();
-    }
+    renderCurrentView();
   } else if (e.key === ' ') {
     e.preventDefault();
     // In Visual Block mode: toggle selection for non-consecutive multi-select
@@ -2897,6 +2948,8 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (currentTab === 'watchlater') {
       deleteVideos();
+    } else if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
+      deleteFromPlaylist();
     } else if (currentTab === 'channels') {
       // Unsubscribe from focused channel
       const channel = filteredChannels[focusedIndex];
@@ -2944,7 +2997,10 @@ document.addEventListener('keydown', (e) => {
       }
     }
   } else if (e.key === 'Enter') {
-    if (currentTab === 'channels') {
+    if (currentTab === 'playlists' && playlistBrowserLevel === 'list') {
+      const playlist = filteredPlaylists[focusedIndex];
+      if (playlist) drillIntoPlaylist(playlist);
+    } else if (currentTab === 'channels') {
       const channel = filteredChannels[focusedIndex];
       if (channel) {
         window.open(`https://www.youtube.com/channel/${channel.id}`, '_blank');
@@ -3056,11 +3112,7 @@ searchInput.addEventListener('input', (e) => {
     searchContainer?.classList.remove('active');
   }
 
-  if (currentTab === 'channels') {
-    renderChannels();
-  } else {
-    renderVideos();
-  }
+  renderCurrentView();
 });
 
 // Load data for current tab
