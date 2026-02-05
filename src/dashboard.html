@@ -1497,6 +1497,9 @@
         <span class="logo-text">NuTube</span>
       </div>
       <nav class="nav-tabs">
+        <button class="nav-tab" data-tab="playlists" id="tab-playlists">
+          Playlists<span class="tab-count" id="playlists-count">-</span>
+        </button>
         <button class="nav-tab active" data-tab="watchlater" id="tab-watchlater">
           Watch Later<span class="tab-count" id="watchlater-count">-</span>
         </button>
@@ -1505,9 +1508,6 @@
         </button>
         <button class="nav-tab" data-tab="channels" id="tab-channels">
           Channels<span class="tab-count" id="channels-count">-</span>
-        </button>
-        <button class="nav-tab" data-tab="playlists" id="tab-playlists">
-          Playlists<span class="tab-count" id="playlists-count">-</span>
         </button>
       </nav>
       <div class="stats">
@@ -1611,22 +1611,34 @@
           </div>
         </div>
         <div>
-          <h4 class="help-section-title">ACTIONS</h4>
+          <h4 class="help-section-title">ACTIONS (ALL TABS)</h4>
           <div class="shortcuts">
-            <div class="shortcut"><span class="key">x</span><span class="key">d</span><span class="key">Del</span><span class="shortcut-desc">Delete</span></div>
-            <div class="shortcut"><span class="key">t</span><span class="shortcut-desc">Move to top</span></div>
-            <div class="shortcut"><span class="key">b</span><span class="shortcut-desc">Move to bottom</span></div>
-            <div class="shortcut"><span class="key">m</span><span class="shortcut-desc">Move to playlist</span></div>
-            <div class="shortcut"><span class="key">1-9</span><span class="shortcut-desc">Quick move</span></div>
+            <div class="shortcut"><span class="key">x</span><span class="key">d</span><span class="key">Del</span><span class="shortcut-desc">Delete / Remove</span></div>
             <div class="shortcut"><span class="key">z</span><span class="shortcut-desc">Undo</span></div>
+            <div class="shortcut"><span class="key">Ctrl+↑</span><span class="shortcut-desc">Move video up *</span></div>
+            <div class="shortcut"><span class="key">Ctrl+↓</span><span class="shortcut-desc">Move video down *</span></div>
+            <div class="shortcut"><span class="key">t</span><span class="shortcut-desc">Move to top *</span></div>
+            <div class="shortcut"><span class="key">b</span><span class="shortcut-desc">Move to bottom *</span></div>
+            <div class="shortcut"><span class="key">m</span><span class="shortcut-desc">Move to playlist *</span></div>
+            <div class="shortcut"><span class="key">1-9</span><span class="shortcut-desc">Quick move *</span></div>
+          </div>
+          <h4 class="help-section-title with-margin-top">PLAYLISTS TAB</h4>
+          <div class="shortcuts">
+            <div class="shortcut"><span class="key">n</span><span class="shortcut-desc">New playlist ‡</span></div>
+            <div class="shortcut"><span class="key">Shift+R</span><span class="shortcut-desc">Rename playlist ‡</span></div>
+            <div class="shortcut"><span class="key">Shift+S</span><span class="shortcut-desc">Sort playlists ‡</span></div>
           </div>
           <h4 class="help-section-title with-margin-top">OTHER</h4>
           <div class="shortcuts">
             <div class="shortcut"><span class="key">Tab</span><span class="shortcut-desc">Switch tabs</span></div>
+            <div class="shortcut"><span class="key">r</span><span class="shortcut-desc">Refresh</span></div>
             <div class="shortcut"><span class="key">w</span><span class="shortcut-desc">Add to Watch Later</span></div>
             <div class="shortcut"><span class="key">Enter</span><span class="shortcut-desc">Open in YouTube</span></div>
-            <div class="shortcut"><span class="key">r</span><span class="shortcut-desc">Refresh</span></div>
             <div class="shortcut"><span class="key">?</span><span class="shortcut-desc">Toggle help</span></div>
+          </div>
+          <div style="margin-top: 12px; font-size: 11px; color: var(--text-secondary); line-height: 1.4;">
+            <div>* Watch Later & Playlist videos only</div>
+            <div>‡ Playlist list view only</div>
           </div>
         </div>
       </div>

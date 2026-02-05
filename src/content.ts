@@ -896,6 +896,50 @@ async function addToPlaylist(videoId: string, playlistId: string): Promise<boole
   }
 }
 
+// Rename a playlist
+async function renamePlaylist(playlistId: string, newTitle: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    await innertubeRequest('browse/edit_playlist', {
+      playlistId,
+      playlistName: newTitle,
+    });
+    return { success: true };
+  } catch (e: any) {
+    // Treat 409 as success - YouTube often returns this but still processes the request
+    if (e.message?.includes('409')) {
+      return { success: true };
+    }
+    console.warn('Rename playlist error:', e.message);
+    return { success: false, error: e.message || String(e) };
+  }
+}
+
+// Move video within a playlist (reorder)
+async function movePlaylistVideo(
+  playlistId: string,
+  setVideoId: string,
+  targetSetVideoId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    await innertubeRequest('browse/edit_playlist', {
+      playlistId,
+      actions: [{
+        setVideoId,
+        action: 'ACTION_MOVE_VIDEO_BEFORE',
+        movedSetVideoIdSuccessor: targetSetVideoId,
+      }],
+    });
+    return { success: true };
+  } catch (e: any) {
+    // Treat 409 as success - YouTube often returns this but still processes the request
+    if (e.message?.includes('409')) {
+      return { success: true };
+    }
+    console.warn('Move playlist video error:', e.message);
+    return { success: false, error: e.message || String(e) };
+  }
+}
+
 // Move video to top of Watch Later
 async function moveToTop(setVideoId: string, firstSetVideoId?: string): Promise<{ success: boolean; error?: string }> {
   try {
@@ -1506,6 +1550,16 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendRespons
         case 'DELETE_PLAYLIST': {
           const dpResult = await deletePlaylist(message.playlistId);
           sendResponse(dpResult);
+          break;
+        }
+        case 'RENAME_PLAYLIST': {
+          const rpResult = await renamePlaylist(message.playlistId, message.newTitle);
+          sendResponse(rpResult);
+          break;
+        }
+        case 'MOVE_PLAYLIST_VIDEO': {
+          const mpvResult = await movePlaylistVideo(message.playlistId, message.setVideoId, message.targetSetVideoId);
+          sendResponse(mpvResult);
           break;
         }
         default:

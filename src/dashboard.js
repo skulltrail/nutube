@@ -167,9 +167,9 @@ let hideWatched = false;
 // Playlist browser state (two-level drill-down)
 let playlistBrowserLevel = 'list'; // 'list' (Level 1) or 'videos' (Level 2)
 let activePlaylistId = null;
-let activePlaylistTitle = '';
 let playlistVideos = [];
 let filteredPlaylists = [];
+let playlistSortMode = 'default'; // 'default', 'alpha', 'alpha-reverse', 'count-desc', 'count-asc'
 
 // Undo history
 const undoStack = [];
@@ -585,6 +585,22 @@ async function saveHideWatchedPref() {
   });
 }
 
+// Playlist sort mode storage
+async function loadPlaylistSortPref() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['playlistSortMode'], (result) => {
+      playlistSortMode = result.playlistSortMode || 'default';
+      resolve();
+    });
+  });
+}
+
+async function savePlaylistSortPref() {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ playlistSortMode }, resolve);
+  });
+}
+
 function updateHideWatchedIndicator() {
   if (hideWatchedIndicatorEl) {
     hideWatchedIndicatorEl.classList.toggle('active', hideWatched);
@@ -730,7 +746,6 @@ function switchTab(tab) {
     breadcrumbEl.style.display = 'none';
     playlistBrowserLevel = 'list';
     activePlaylistId = null;
-    activePlaylistTitle = '';
   }
 
   // Switch data and render
@@ -756,6 +771,9 @@ function renderPlaylistBrowser() {
   filteredPlaylists = query
     ? playlists.filter(p => p.title.toLowerCase().includes(query))
     : [...playlists];
+
+  // Apply sorting
+  filteredPlaylists = applySortToPlaylists(filteredPlaylists);
 
   // Clamp focusedIndex
   if (filteredPlaylists.length === 0) {
@@ -802,7 +820,6 @@ async function drillIntoPlaylist(playlist) {
   if (!playlist) return;
 
   activePlaylistId = playlist.id;
-  activePlaylistTitle = playlist.title;
   playlistBrowserLevel = 'videos';
 
   // Show breadcrumb
@@ -845,7 +862,6 @@ async function drillIntoPlaylist(playlist) {
 function drillOutOfPlaylist() {
   playlistBrowserLevel = 'list';
   activePlaylistId = null;
-  activePlaylistTitle = '';
   breadcrumbEl.style.display = 'none';
   focusedIndex = 0;
   selectedIndices.clear();
@@ -879,18 +895,18 @@ function getMaxIndex() {
 
 // Get next tab in cycle
 function getNextTab() {
+  if (currentTab === 'playlists') return 'watchlater';
   if (currentTab === 'watchlater') return 'subscriptions';
   if (currentTab === 'subscriptions') return 'channels';
-  if (currentTab === 'channels') return 'playlists';
-  return 'watchlater';
+  return 'playlists';
 }
 
 // Get previous tab in cycle (for SHIFT+TAB)
 function getPrevTab() {
-  if (currentTab === 'watchlater') return 'playlists';
   if (currentTab === 'playlists') return 'channels';
-  if (currentTab === 'channels') return 'subscriptions';
-  return 'watchlater';
+  if (currentTab === 'watchlater') return 'playlists';
+  if (currentTab === 'subscriptions') return 'watchlater';
+  return 'subscriptions';
 }
 
 // Add to Watch Later (for subscriptions tab)
@@ -2038,13 +2054,41 @@ async function undo() {
         break;
       }
       case 'move_to_top':
-      case 'move_to_bottom': {
+      case 'move_to_bottom':
+      case 'move_up':
+      case 'move_down': {
         // Restore local state
         videos = lastAction.originalVideos;
         focusedIndex = lastAction.originalFocusedIndex;
         selectedIndices = lastAction.originalSelectedIndices;
         renderVideos();
         showToast('Position restored (refresh to sync with YouTube)', 'success');
+        break;
+      }
+      case 'delete_from_playlist': {
+        // Re-add deleted videos to the playlist
+        let restored = 0;
+        for (const video of lastAction.data.videos) {
+          try {
+            const result = await sendMessage({
+              type: 'ADD_TO_PLAYLIST',
+              videoId: video.id,
+              playlistId: lastAction.data.playlistId,
+            });
+            if (result.success) {
+              restored++;
+            }
+          } catch (e) {
+            errorLog('Restore to playlist failed:', e);
+          }
+        }
+        // Restore local state
+        videos = lastAction.originalVideos;
+        playlistVideos = lastAction.originalVideos;
+        focusedIndex = lastAction.originalFocusedIndex;
+        selectedIndices = lastAction.originalSelectedIndices;
+        renderVideos();
+        showToast(`Restored ${restored}/${lastAction.data.videos.length} video(s) to playlist`, restored > 0 ? 'success' : 'error');
         break;
       }
       default:
@@ -2119,6 +2163,12 @@ async function deleteFromPlaylist() {
 
   const targets = getTargetVideos();
   if (targets.length === 0) return;
+
+  // Save undo state
+  saveUndoState('delete_from_playlist', {
+    videos: targets,
+    playlistId: activePlaylistId,
+  });
 
   // Optimistically update UI
   const targetIds = new Set(targets.map(v => v.id));
@@ -2232,6 +2282,330 @@ async function deleteSelectedPlaylist() {
     showToast('Failed to delete playlist', 'error');
   }
   setStatus('Ready');
+}
+
+async function renameSelectedPlaylist() {
+  const playlist = filteredPlaylists[focusedIndex];
+  if (!playlist) return;
+
+  const newTitle = prompt('Rename playlist:', playlist.title);
+  if (!newTitle || !newTitle.trim() || newTitle.trim() === playlist.title) return;
+
+  const trimmedTitle = newTitle.trim();
+  setStatus('Renaming playlist...', 'loading');
+
+  try {
+    const result = await sendMessage({
+      type: 'RENAME_PLAYLIST',
+      playlistId: playlist.id,
+      newTitle: trimmedTitle,
+    });
+
+    if (result.success) {
+      // Update local state
+      const playlistInMain = playlists.find(p => p.id === playlist.id);
+      if (playlistInMain) {
+        playlistInMain.title = trimmedTitle;
+      }
+      renderPlaylistBrowser();
+      showToast(`Renamed to "${trimmedTitle}"`, 'success');
+    } else {
+      showToast('Failed to rename playlist', 'error');
+    }
+  } catch (error) {
+    errorLog('Rename playlist error:', error);
+    showToast('Failed to rename playlist', 'error');
+  }
+  setStatus('Ready');
+}
+
+async function movePlaylistVideoUp() {
+  if (currentTab !== 'playlists' || playlistBrowserLevel !== 'videos') return;
+  if (!activePlaylistId) return;
+
+  const targets = getTargetVideos();
+  if (targets.length === 0) return;
+
+  // Can't move if first video is selected
+  const firstTargetIndex = filteredVideos.findIndex(v => v.id === targets[0].id);
+  if (firstTargetIndex === 0) {
+    showToast('Already at the top', 'info');
+    return;
+  }
+
+  // Get the video that will be the new successor (one above the first selected)
+  const targetSuccessor = filteredVideos[firstTargetIndex - 1];
+  if (!targetSuccessor) return;
+
+  // Optimistic UI update
+  const targetIds = new Set(targets.map(v => v.id));
+  const nonTargets = playlistVideos.filter(v => !targetIds.has(v.id));
+  const successorIndexInFull = nonTargets.findIndex(v => v.id === targetSuccessor.id);
+
+  // Remove targets from their current positions
+  const remaining = playlistVideos.filter(v => !targetIds.has(v.id));
+  // Insert targets before the successor
+  remaining.splice(successorIndexInFull, 0, ...targets);
+  playlistVideos = remaining;
+  videos = playlistVideos;
+
+  // Move focus up
+  focusedIndex = Math.max(focusedIndex - 1, 0);
+  renderVideos();
+
+  // API call in background (move in reverse order to maintain relative order)
+  showToast(`Moving ${targets.length} video(s) up...`);
+
+  Promise.all(
+    [...targets].reverse().map(video =>
+      sendMessage({
+        type: 'MOVE_PLAYLIST_VIDEO',
+        playlistId: activePlaylistId,
+        setVideoId: video.setVideoId,
+        targetSetVideoId: targetSuccessor.setVideoId,
+      }).catch(e => {
+        errorLog('Move playlist video error:', e);
+        return { success: false, error: String(e) };
+      })
+    )
+  ).then(results => {
+    const errors = results.filter(r => r && !r.success && r.error);
+    if (errors.length > 0) {
+      showToast(`Some moves failed`, 'error');
+    }
+  });
+}
+
+async function movePlaylistVideoDown() {
+  if (currentTab !== 'playlists' || playlistBrowserLevel !== 'videos') return;
+  if (!activePlaylistId) return;
+
+  const targets = getTargetVideos();
+  if (targets.length === 0) return;
+
+  // Can't move if last video is selected
+  const lastTargetIndex = filteredVideos.findIndex(v => v.id === targets[targets.length - 1].id);
+  if (lastTargetIndex === filteredVideos.length - 1) {
+    showToast('Already at the bottom', 'info');
+    return;
+  }
+
+  // Get the video that will come after the moved block (two positions down from last selected)
+  const targetSuccessor = filteredVideos[lastTargetIndex + 2];
+  if (!targetSuccessor) {
+    // Moving to the very end - need special handling
+    showToast('Already at the bottom', 'info');
+    return;
+  }
+
+  // Optimistic UI update
+  const targetIds = new Set(targets.map(v => v.id));
+  const remaining = playlistVideos.filter(v => !targetIds.has(v.id));
+  const successorIndexInRemaining = remaining.findIndex(v => v.id === targetSuccessor.id);
+
+  // Insert targets before the successor
+  remaining.splice(successorIndexInRemaining, 0, ...targets);
+  playlistVideos = remaining;
+  videos = playlistVideos;
+
+  // Move focus down
+  focusedIndex = Math.min(focusedIndex + 1, playlistVideos.length - 1);
+  renderVideos();
+
+  // API call in background (move in reverse order to maintain relative order)
+  showToast(`Moving ${targets.length} video(s) down...`);
+
+  Promise.all(
+    [...targets].reverse().map(video =>
+      sendMessage({
+        type: 'MOVE_PLAYLIST_VIDEO',
+        playlistId: activePlaylistId,
+        setVideoId: video.setVideoId,
+        targetSetVideoId: targetSuccessor.setVideoId,
+      }).catch(e => {
+        errorLog('Move playlist video error:', e);
+        return { success: false, error: String(e) };
+      })
+    )
+  ).then(results => {
+    const errors = results.filter(r => r && !r.success && r.error);
+    if (errors.length > 0) {
+      showToast(`Some moves failed`, 'error');
+    }
+  });
+}
+
+async function movePlaylistVideoToTop() {
+  if (currentTab !== 'playlists' || playlistBrowserLevel !== 'videos') return;
+  if (!activePlaylistId) return;
+
+  const targets = getTargetVideos();
+  if (targets.length === 0) return;
+
+  // Can't move if already at top
+  const firstTargetIndex = filteredVideos.findIndex(v => v.id === targets[0].id);
+  if (firstTargetIndex === 0) {
+    showToast('Already at the top', 'info');
+    return;
+  }
+
+  // Get the first non-target video (will be the new successor)
+  const targetIds = new Set(targets.map(v => v.id));
+  const firstNonTargetVideo = playlistVideos.find(v => !targetIds.has(v.id));
+  if (!firstNonTargetVideo) return;
+
+  // Save for undo
+  saveUndoState('move_to_top', { videos: targets });
+
+  // Optimistic UI update - move targets to top
+  playlistVideos = playlistVideos.filter(v => !targetIds.has(v.id));
+  playlistVideos = [...targets, ...playlistVideos];
+  videos = playlistVideos;
+
+  // Clear selection and focus on first moved item
+  selectedIndices.clear();
+  visualModeStart = null;
+  visualBlockMode = false;
+  updateMode();
+  focusedIndex = 0;
+  renderVideos();
+
+  showToast(`Moving ${targets.length} video(s) to top...`);
+
+  // API call in background
+  Promise.all(
+    [...targets].reverse().map(video =>
+      sendMessage({
+        type: 'MOVE_PLAYLIST_VIDEO',
+        playlistId: activePlaylistId,
+        setVideoId: video.setVideoId,
+        targetSetVideoId: firstNonTargetVideo.setVideoId,
+      }).catch(e => {
+        errorLog('Move to top error:', e);
+        return { success: false, error: String(e) };
+      })
+    )
+  ).then(results => {
+    const errors = results.filter(r => r && !r.success && r.error);
+    if (errors.length > 0) {
+      showToast(`Move to top had errors`, 'error');
+    } else {
+      showToast('Moved to top', 'success');
+    }
+  });
+}
+
+async function movePlaylistVideoToBottom() {
+  if (currentTab !== 'playlists' || playlistBrowserLevel !== 'videos') return;
+  if (!activePlaylistId) return;
+
+  const targets = getTargetVideos();
+  if (targets.length === 0) return;
+
+  // Can't move if already at bottom
+  const lastTargetIndex = filteredVideos.findIndex(v => v.id === targets[targets.length - 1].id);
+  if (lastTargetIndex === filteredVideos.length - 1) {
+    showToast('Already at the bottom', 'info');
+    return;
+  }
+
+  // Save for undo
+  saveUndoState('move_to_bottom', { videos: targets });
+
+  // Optimistic UI update - move targets to bottom
+  const targetIds = new Set(targets.map(v => v.id));
+  playlistVideos = playlistVideos.filter(v => !targetIds.has(v.id));
+  playlistVideos = [...playlistVideos, ...targets];
+  videos = playlistVideos;
+
+  // Clear selection and focus on first moved item
+  selectedIndices.clear();
+  visualModeStart = null;
+  visualBlockMode = false;
+  updateMode();
+  focusedIndex = videos.length - targets.length;
+  renderVideos();
+
+  showToast(`Moving ${targets.length} video(s) to bottom...`);
+
+  // API call - move to after the last video
+  // Since we're moving to the very end, we need to use a different approach
+  // We'll move each video to be after the current last video
+  const moves = [];
+  for (let i = 0; i < targets.length; i++) {
+    // For moving to bottom, we don't have a successor, so we'll need to move them one by one
+    // This is a limitation of the YouTube API - we can only move before a video
+    moves.push(
+      sendMessage({
+        type: 'MOVE_PLAYLIST_VIDEO',
+        playlistId: activePlaylistId,
+        setVideoId: targets[i].setVideoId,
+        targetSetVideoId: null, // Will be interpreted as move to end
+      }).catch(e => {
+        errorLog('Move to bottom error:', e);
+        return { success: false, error: String(e) };
+      })
+    );
+  }
+
+  Promise.all(moves).then(results => {
+    const errors = results.filter(r => r && !r.success && r.error);
+    if (errors.length > 0) {
+      showToast(`Move to bottom had errors`, 'error');
+    } else {
+      showToast('Moved to bottom', 'success');
+    }
+  });
+}
+
+function cycleSortMode() {
+  if (currentTab !== 'playlists' || playlistBrowserLevel !== 'list') return;
+
+  const modes = ['default', 'alpha', 'alpha-reverse', 'count-desc', 'count-asc'];
+  const currentIndex = modes.indexOf(playlistSortMode);
+  const nextIndex = (currentIndex + 1) % modes.length;
+  playlistSortMode = modes[nextIndex];
+
+  // Persist to chrome.storage
+  savePlaylistSortPref();
+
+  // Update display
+  renderPlaylistBrowser();
+
+  // Show toast with current sort mode
+  const modeNames = {
+    'default': 'Default order',
+    'alpha': 'A-Z',
+    'alpha-reverse': 'Z-A',
+    'count-desc': 'Most videos first',
+    'count-asc': 'Fewest videos first',
+  };
+  showToast(`Sort: ${modeNames[playlistSortMode]}`, 'info');
+}
+
+function applySortToPlaylists(playlistsToSort) {
+  const sorted = [...playlistsToSort];
+
+  switch (playlistSortMode) {
+    case 'alpha':
+      sorted.sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
+      break;
+    case 'alpha-reverse':
+      sorted.sort((a, b) => b.title.toLowerCase().localeCompare(a.title.toLowerCase()));
+      break;
+    case 'count-desc':
+      sorted.sort((a, b) => (b.videoCount || 0) - (a.videoCount || 0));
+      break;
+    case 'count-asc':
+      sorted.sort((a, b) => (a.videoCount || 0) - (b.videoCount || 0));
+      break;
+    case 'default':
+    default:
+      // Return as-is (YouTube's original order)
+      break;
+  }
+
+  return sorted;
 }
 
 /**
@@ -2397,6 +2771,128 @@ async function moveToTop() {
       showToast('Moved to top', 'success');
     }
     setStatus('Ready');
+  });
+}
+
+async function moveWatchLaterVideoUp() {
+  if (currentTab !== 'watchlater') return;
+
+  const targets = getTargetVideos();
+  if (targets.length === 0) return;
+
+  // Can't move if first video is selected
+  const firstTargetIndex = filteredVideos.findIndex(v => v.id === targets[0].id);
+  if (firstTargetIndex === 0) {
+    showToast('Already at the top', 'info');
+    return;
+  }
+
+  // Get the video that will be the new successor (one above the first selected)
+  const targetSuccessor = filteredVideos[firstTargetIndex - 1];
+  if (!targetSuccessor) return;
+
+  // Save for undo
+  saveUndoState('move_up', { videos: targets });
+
+  // Optimistic UI update
+  const targetIds = new Set(targets.map(v => v.id));
+  const nonTargets = videos.filter(v => !targetIds.has(v.id));
+  const successorIndexInFull = nonTargets.findIndex(v => v.id === targetSuccessor.id);
+
+  // Remove targets and insert before successor
+  const remaining = videos.filter(v => !targetIds.has(v.id));
+  remaining.splice(successorIndexInFull, 0, ...targets);
+  videos = remaining;
+
+  // Move focus up
+  focusedIndex = Math.max(focusedIndex - 1, 0);
+  selectedIndices.clear();
+  visualModeStart = null;
+  visualBlockMode = false;
+  updateMode();
+  renderVideos();
+
+  // API call in background
+  showToast(`Moving ${targets.length} video(s) up...`);
+
+  Promise.all(
+    [...targets].reverse().map(video =>
+      sendMessage({
+        type: 'MOVE_TO_TOP',
+        setVideoId: video.setVideoId,
+        firstSetVideoId: targetSuccessor.setVideoId,
+      }).catch(e => {
+        errorLog('Move up error:', e);
+        return { success: false, error: String(e) };
+      })
+    )
+  ).then(results => {
+    const errors = results.filter(r => r && !r.success && r.error);
+    if (errors.length > 0) {
+      showToast(`Some moves failed`, 'error');
+    }
+  });
+}
+
+async function moveWatchLaterVideoDown() {
+  if (currentTab !== 'watchlater') return;
+
+  const targets = getTargetVideos();
+  if (targets.length === 0) return;
+
+  // Can't move if last video is selected
+  const lastTargetIndex = filteredVideos.findIndex(v => v.id === targets[targets.length - 1].id);
+  if (lastTargetIndex === filteredVideos.length - 1) {
+    showToast('Already at the bottom', 'info');
+    return;
+  }
+
+  // Get the video that will come after the moved block (two positions down from last selected)
+  const targetSuccessor = filteredVideos[lastTargetIndex + 2];
+  if (!targetSuccessor) {
+    showToast('Already at the bottom', 'info');
+    return;
+  }
+
+  // Save for undo
+  saveUndoState('move_down', { videos: targets });
+
+  // Optimistic UI update
+  const targetIds = new Set(targets.map(v => v.id));
+  const remaining = videos.filter(v => !targetIds.has(v.id));
+  const successorIndexInRemaining = remaining.findIndex(v => v.id === targetSuccessor.id);
+
+  // Insert targets before the successor
+  remaining.splice(successorIndexInRemaining, 0, ...targets);
+  videos = remaining;
+
+  // Move focus down
+  focusedIndex = Math.min(focusedIndex + 1, videos.length - 1);
+  selectedIndices.clear();
+  visualModeStart = null;
+  visualBlockMode = false;
+  updateMode();
+  renderVideos();
+
+  // API call in background
+  showToast(`Moving ${targets.length} video(s) down...`);
+
+  Promise.all(
+    [...targets].reverse().map(video =>
+      sendMessage({
+        type: 'MOVE_TO_TOP',
+        setVideoId: video.setVideoId,
+        firstSetVideoId: targetSuccessor.setVideoId,
+      }).catch(e => {
+        errorLog('Move down error:', e);
+        return { success: false, error: String(e) };
+      })
+    )
+  ).then(results => {
+    const errors = results.filter(r => r && !r.success && r.error);
+    if (errors.length > 0) {
+      showToast(`Some moves failed`, 'error');
+    }
   });
 }
 
@@ -2583,7 +3079,33 @@ function renderHelpModal() {
   let previewShortcuts = [];
   let tabTitle = '';
 
-  if (currentTab === 'watchlater') {
+  if (currentTab === 'playlists' && playlistBrowserLevel === 'list') {
+    tabTitle = 'Playlists';
+    actionsShortcuts = [
+      { keys: ['Enter'], desc: 'Open playlist' },
+      { keys: ['n'], desc: 'New playlist' },
+      { keys: ['⇧R'], desc: 'Rename playlist' },
+      { keys: ['⇧S'], desc: 'Sort playlists' },
+      { keys: ['x', 'd'], desc: 'Delete playlist' },
+    ];
+  } else if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
+    tabTitle = 'Playlist Videos';
+    selectionShortcuts = [
+      { keys: ['v'], desc: 'Visual Line (range select)' },
+      { keys: ['⌃v'], desc: 'Visual Block (toggle select)' },
+      { keys: ['Space'], desc: 'Open video / select (in ⌃v)' },
+      { keys: ['⌃a'], desc: 'Select all' },
+    ];
+    actionsShortcuts = [
+      { keys: ['x', 'd'], desc: 'Remove from playlist' },
+      { keys: ['z'], desc: 'Undo' },
+      { keys: ['⇧J', '⇧K'], desc: 'Move video down/up' },
+      { keys: ['t', 'b'], desc: 'Move to top/bottom' },
+      { keys: ['m'], desc: 'Move to another playlist' },
+      { keys: ['1-9'], desc: 'Quick move to playlist' },
+      { keys: ['Backspace'], desc: 'Back to playlist list' },
+    ];
+  } else if (currentTab === 'watchlater') {
     tabTitle = 'Watch Later';
     selectionShortcuts = [
       { keys: ['v'], desc: 'Visual Line (range select)' },
@@ -2595,6 +3117,7 @@ function renderHelpModal() {
       { keys: ['x', 'd'], desc: 'Delete' },
       { keys: ['m'], desc: 'Move to playlist' },
       { keys: ['1-9'], desc: 'Quick move to playlist' },
+      { keys: ['⇧J', '⇧K'], desc: 'Move video down/up' },
       { keys: ['t', 'b'], desc: 'Move to top/bottom' },
       { keys: ['u', 'z'], desc: 'Undo' },
     ];
@@ -2980,6 +3503,22 @@ document.addEventListener('keydown', (e) => {
     const pageSize = Math.floor(window.innerHeight / VIDEO_ITEM_HEIGHT_PX / 2);
     focusedIndex = Math.max(focusedIndex - pageSize, 0);
     renderCurrentView();
+  } else if (e.key === 'K') {
+    // Shift+K: move video(s) up (Watch Later and Playlists)
+    e.preventDefault();
+    if (currentTab === 'watchlater') {
+      moveWatchLaterVideoUp();
+    } else if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
+      movePlaylistVideoUp();
+    }
+  } else if (e.key === 'J') {
+    // Shift+J: move video(s) down (Watch Later and Playlists)
+    e.preventDefault();
+    if (currentTab === 'watchlater') {
+      moveWatchLaterVideoDown();
+    } else if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
+      movePlaylistVideoDown();
+    }
   } else if (e.key === ' ') {
     e.preventDefault();
     // In Visual Block mode: toggle selection for non-consecutive multi-select
@@ -3054,6 +3593,16 @@ document.addEventListener('keydown', (e) => {
     if (currentTab === 'playlists' && playlistBrowserLevel === 'list') {
       createNewPlaylist();
     }
+  } else if (e.key === 'R') {
+    // Shift+R: Rename playlist
+    if (currentTab === 'playlists' && playlistBrowserLevel === 'list') {
+      renameSelectedPlaylist();
+    }
+  } else if (e.key === 'S') {
+    // Shift+S: Sort playlists
+    if (currentTab === 'playlists' && playlistBrowserLevel === 'list') {
+      cycleSortMode();
+    }
   } else if (e.key === 'x' || e.key === 'd' || e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
     if (currentTab === 'watchlater') {
@@ -3072,14 +3621,20 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 't') {
     if (currentTab === 'watchlater') {
       moveToTop();
+    } else if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
+      movePlaylistVideoToTop();
     }
   } else if (e.key === 'b') {
     if (currentTab === 'watchlater') {
       moveToBottom();
+    } else if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
+      movePlaylistVideoToBottom();
     }
   } else if (e.key === 'm') {
     if (currentTab === 'watchlater' || currentTab === 'subscriptions') {
       openModal();
+    } else if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
+      openModal(); // Move to another playlist
     } else {
       showToast('Press w to add to Watch Later', 'info');
     }
@@ -3090,6 +3645,19 @@ document.addEventListener('keydown', (e) => {
       if (playlist) {
         if (playlist.id === 'WL') {
           showToast('Cannot move from Watch Later to Watch Later', 'info');
+        } else {
+          moveToPlaylist(playlist.id);
+        }
+      } else {
+        showToast(`No playlist assigned to ${e.key}. Press m to assign.`, 'info');
+      }
+    } else if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
+      const playlist = getPlaylistByQuickMove(e.key);
+      if (playlist) {
+        if (playlist.id === activePlaylistId) {
+          showToast('Cannot move to the same playlist', 'info');
+        } else if (playlist.id === 'WL') {
+          moveToPlaylist(playlist.id);
         } else {
           moveToPlaylist(playlist.id);
         }
@@ -3142,12 +3710,16 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (currentTab === 'watchlater') {
       undo();
+    } else if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
+      undo();
     } else if (currentTab === 'channels') {
       undoChannelUnsubscribe();
     }
   } else if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
     if (currentTab === 'watchlater') {
+      undo();
+    } else if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
       undo();
     } else if (currentTab === 'channels') {
       undoChannelUnsubscribe();
@@ -3232,7 +3804,13 @@ async function loadData() {
   loadingEl.style.display = 'flex';
   videoList.innerHTML = '';
 
-  const loadingLabel = currentTab === 'watchlater' ? 'Watch Later' : 'Subscriptions';
+  const loadingLabels = {
+    'watchlater': 'Watch Later',
+    'subscriptions': 'Subscriptions',
+    'playlists': 'Playlists',
+    'channels': 'Channels'
+  };
+  const loadingLabel = loadingLabels[currentTab] || 'Data';
   loadingText.textContent = `Loading ${loadingLabel}...`;
   setStatus(`Loading ${loadingLabel}...`);
 
@@ -3261,7 +3839,49 @@ async function loadData() {
         rebuildPlaylistMap();
         renderPlaylists();
       }
-    } else {
+      setStatus('Ready');
+      showToast(`Loaded ${watchLaterVideos.length} videos`, 'success');
+    } else if (currentTab === 'playlists') {
+      // Load Playlists
+      const playlistsResult = await sendMessage({ type: 'GET_PLAYLISTS' });
+
+      if (playlistsResult.success) {
+        playlists = playlistsResult.data;
+        rebuildPlaylistMap();
+        playlistsCountEl.textContent = playlists.length;
+
+        // If in video view, reload that playlist
+        if (playlistBrowserLevel === 'videos' && activePlaylistId) {
+          const activePlaylist = playlists.find(p => p.id === activePlaylistId);
+          if (activePlaylist) {
+            await drillIntoPlaylist(activePlaylist);
+          } else {
+            drillOutOfPlaylist();
+            renderPlaylistBrowser();
+          }
+        } else {
+          renderPlaylistBrowser();
+        }
+        setStatus('Ready');
+        showToast(`Loaded ${playlists.length} playlists`, 'success');
+      } else {
+        throw new Error(playlistsResult.error || 'Failed to load playlists');
+      }
+    } else if (currentTab === 'channels') {
+      // Load Channels
+      const channelsResult = await sendMessage({ type: 'GET_CHANNELS' });
+
+      if (channelsResult.success) {
+        channels = channelsResult.data;
+        rebuildChannelMap();
+        channelsCountEl.textContent = channels.length;
+        renderChannels();
+        setStatus('Ready');
+        showToast(`Loaded ${channels.length} channels`, 'success');
+      } else {
+        throw new Error(channelsResult.error || 'Failed to load channels');
+      }
+    } else if (currentTab === 'subscriptions') {
       // Load Subscriptions
       const subsResult = await sendMessage({ type: 'GET_SUBSCRIPTIONS' });
 
@@ -3272,13 +3892,12 @@ async function loadData() {
         videos = subscriptionVideos;
         subscriptionsCountEl.textContent = subscriptionVideos.length;
         renderVideos();
+        setStatus('Ready');
+        showToast(`Loaded ${subscriptionVideos.length} videos`, 'success');
       } else {
         throw new Error(subsResult.error || 'Failed to load subscriptions');
       }
     }
-
-    setStatus('Ready');
-    showToast(`Loaded ${videos.length} videos`, 'success');
   } catch (error) {
     errorLog('Load error:', error);
     setStatus(error.message, 'error');
@@ -3325,6 +3944,7 @@ async function loadAllData() {
       loadHideWatchLaterPref(),
       loadWatchedOverrides(),
       loadHideWatchedPref(),
+      loadPlaylistSortPref(),
     ]);
 
     if (wlResult.success) {

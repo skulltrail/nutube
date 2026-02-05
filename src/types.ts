@@ -31,6 +31,8 @@
  * - REMOVE_FROM_PLAYLIST: Remove video from a playlist
  * - CREATE_PLAYLIST: Create a new playlist
  * - DELETE_PLAYLIST: Delete a playlist
+ * - RENAME_PLAYLIST: Rename a playlist
+ * - MOVE_PLAYLIST_VIDEO: Move video within a playlist
  *
  * SUBSCRIPTION OPERATIONS:
  * - SUBSCRIBE: Subscribe to a channel
@@ -61,4 +63,6 @@ export type MessageType =
   | { type: 'REMOVE_FROM_PLAYLIST'; videoId: string; setVideoId: string; playlistId: string }
   | { type: 'CREATE_PLAYLIST'; title: string }
   | { type: 'DELETE_PLAYLIST'; playlistId: string }
+  | { type: 'RENAME_PLAYLIST'; playlistId: string; newTitle: string }
+  | { type: 'MOVE_PLAYLIST_VIDEO'; playlistId: string; setVideoId: string; targetSetVideoId: string }
   | { type: 'PING' };
