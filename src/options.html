@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NuTube Settings</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f0f11;
+      --card: #17171a;
+      --border: #2a2a2f;
+      --text: #ececf0;
+      --muted: #a3a3aa;
+      --accent: #ff4444;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top right, #1f1f22 0%, var(--bg) 45%);
+      color: var(--text);
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      line-height: 1.4;
+    }
+
+    main {
+      max-width: 760px;
+      margin: 30px auto;
+      padding: 0 18px 24px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 22px;
+    }
+
+    p {
+      margin: 0 0 18px;
+      color: var(--muted);
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      display: grid;
+      gap: 16px;
+    }
+
+    label {
+      display: grid;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    input, select {
+      border: 1px solid var(--border);
+      background: #111114;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font: inherit;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .row.single {
+      grid-template-columns: 1fr;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    button {
+      border: 1px solid var(--border);
+      background: #1f1f24;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 9px 12px;
+      cursor: pointer;
+      font: inherit;
+    }
+
+    button.primary {
+      border-color: var(--accent);
+      background: #2b1414;
+    }
+
+    .status {
+      min-height: 16px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    @media (max-width: 640px) {
+      .row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>NuTube Settings</h1>
+    <p>Tune behavior for performance, startup, and keyboard defaults.</p>
+
+    <section class="card">
+      <div class="row">
+        <label>
+          Default tab
+          <select id="default-tab">
+            <option value="watchlater">Watch Later</option>
+            <option value="subscriptions">Subscriptions</option>
+            <option value="channels">Channels</option>
+            <option value="playlists">Playlists</option>
+          </select>
+        </label>
+
+        <label>
+          Operation concurrency (1-8)
+          <input id="operation-concurrency" type="number" min="1" max="8" step="1">
+        </label>
+      </div>
+
+      <div class="row">
+        <label>
+          Operation retries (0-5)
+          <input id="operation-retries" type="number" min="0" max="5" step="1">
+        </label>
+
+        <label>
+          Fuzzy search threshold (0.1-0.95)
+          <input id="fuzzy-threshold" type="number" min="0.1" max="0.95" step="0.05">
+        </label>
+      </div>
+
+      <div class="row single">
+        <label>
+          Key mapping (JSON)
+          <input id="keymap-json" type="text" placeholder='{"delete":"x","move":"m","refresh":"r"}'>
+        </label>
+      </div>
+
+      <div class="actions">
+        <button id="save" class="primary">Save Settings</button>
+        <button id="reset">Reset Defaults</button>
+      </div>
+
+      <div id="status" class="status"></div>
+    </section>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

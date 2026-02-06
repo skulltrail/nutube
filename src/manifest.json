@@ -27,12 +27,14 @@
   ],
   "action": {
     "default_title": "NuTube",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
   },
+  "options_page": "options.html",
   "side_panel": {
     "default_path": "dashboard.html?surface=sidepanel"
   },
@@ -56,12 +58,5 @@
       },
       "description": "Open NuTube side panel on current tab"
     }
-  },
-  "chrome_url_overrides": {},
-  "web_accessible_resources": [
-    {
-      "resources": ["dashboard.html", "dashboard.js"],
-      "matches": ["<all_urls>"]
-    }
-  ]
+  }
 }

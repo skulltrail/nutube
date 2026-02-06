@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NuTube</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #121214;
+      --panel: #1a1a1d;
+      --border: #2a2a2e;
+      --text: #ececec;
+      --muted: #a0a0a5;
+      --accent: #ff4444;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      width: 320px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+    }
+
+    .wrap {
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    button {
+      width: 100%;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 9px 10px;
+      cursor: pointer;
+      text-align: left;
+      font: inherit;
+    }
+
+    button:hover {
+      border-color: var(--accent);
+    }
+
+    .footer {
+      color: var(--muted);
+      font-size: 11px;
+      border-top: 1px solid var(--border);
+      padding-top: 10px;
+    }
+
+    .error {
+      color: #ff8b8b;
+      min-height: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>NuTube Control</h1>
+    <p>Quick access to dashboard and side panel companion.</p>
+
+    <button id="open-dashboard">Open Full Dashboard</button>
+    <button id="open-side-panel">Open Side Panel on This Tab</button>
+    <button id="open-youtube">Open YouTube</button>
+    <button id="open-options">Open Settings</button>
+
+    <div id="error" class="error"></div>
+
+    <div class="footer">
+      Shortcuts: <code>Ctrl/Cmd+Shift+Y</code> dashboard, <code>Ctrl/Cmd+Shift+U</code> side panel
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
