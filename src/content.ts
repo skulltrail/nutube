@@ -40,6 +40,7 @@
  */
 
 import { MessageType } from './types';
+import { parseVideoItem, parseSubscriptionVideoItem, parseLockupViewModel, parseRelativeTime } from './parsers';
 
 // =============================================================================
 // CONSTANTS
@@ -165,31 +166,6 @@ async function innertubeRequest(endpoint: string, body: object): Promise<any> {
   return response.json();
 }
 
-/**
- * Parse a video item from Watch Later playlist response.
- * Handles playlistVideoRenderer and playlistPanelVideoRenderer formats.
- * @param item - Raw item from YouTube API response
- * @returns Parsed Video object or null if not a valid video
- */
-function parseVideoItem(item: any): Video | null {
-  const renderer = item.playlistVideoRenderer || item.playlistPanelVideoRenderer;
-  if (!renderer) return null;
-
-  const videoId = renderer.videoId;
-  if (!videoId) return null;
-
-  return {
-    id: videoId,
-    title: renderer.title?.runs?.[0]?.text || renderer.title?.simpleText || 'Unknown',
-    channel: renderer.shortBylineText?.runs?.[0]?.text || 'Unknown',
-    channelId: renderer.shortBylineText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId || '',
-    thumbnail: renderer.thumbnail?.thumbnails?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
-    duration: renderer.lengthText?.simpleText || renderer.lengthText?.runs?.[0]?.text || '',
-    publishedAt: renderer.publishedTimeText?.simpleText || '',
-    setVideoId: renderer.setVideoId,
-  };
-}
-
 // Shared helper: fetch videos from any playlist by browse ID
 async function fetchPlaylistVideos(browseId: string): Promise<Video[]> {
   const videos: Video[] = [];
@@ -241,42 +217,6 @@ async function getWatchLater(): Promise<Video[]> {
 // Fetch videos from a specific playlist
 async function getPlaylistVideos(playlistId: string): Promise<Video[]> {
   return fetchPlaylistVideos('VL' + playlistId);
-}
-
-/**
- * Parse a video from subscription feed or search results.
- * Handles videoRenderer, gridVideoRenderer, and compactVideoRenderer formats.
- * @param item - Raw item from YouTube API response
- * @returns Parsed Video object or null if not a valid video
- */
-function parseSubscriptionVideoItem(item: any): Video | null {
-  // Try to find videoRenderer in various locations
-  const videoRenderer =
-    item.videoRenderer ||
-    item.content?.videoRenderer ||  // for richItemRenderer
-    item.gridVideoRenderer ||
-    item.compactVideoRenderer;
-
-  if (videoRenderer) {
-    const videoId = videoRenderer.videoId;
-    if (!videoId) return null;
-
-    return {
-      id: videoId,
-      title: videoRenderer.title?.runs?.[0]?.text || videoRenderer.title?.simpleText || 'Unknown',
-      channel: videoRenderer.ownerText?.runs?.[0]?.text ||
-               videoRenderer.shortBylineText?.runs?.[0]?.text ||
-               videoRenderer.longBylineText?.runs?.[0]?.text || 'Unknown',
-      channelId: videoRenderer.ownerText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId ||
-                 videoRenderer.shortBylineText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId ||
-                 videoRenderer.longBylineText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId || '',
-      thumbnail: videoRenderer.thumbnail?.thumbnails?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
-      duration: videoRenderer.lengthText?.simpleText || videoRenderer.lengthText?.runs?.[0]?.text || '',
-      publishedAt: videoRenderer.publishedTimeText?.simpleText || videoRenderer.publishedTimeText?.runs?.[0]?.text || '',
-    };
-  }
-
-  return null;
 }
 
 // Extract video count from playlist lockupViewModel
@@ -362,112 +302,6 @@ function findVideoCountInObject(obj: any, visited = new WeakSet()): number {
   }
 
   return 0;
-}
-
-// Extract duration and progress from lockupViewModel overlay structure
-function extractDurationAndProgress(lockup: any): { duration: string; progressPercent: number; watched: boolean } {
-  const result = { duration: '', progressPercent: 0, watched: false };
-
-  // Duration lives in contentImage.thumbnailViewModel.overlays
-  const overlays = lockup.contentImage?.thumbnailViewModel?.overlays || [];
-
-  for (const overlay of overlays) {
-    // Path 1: thumbnailOverlayBadgeViewModel (standard duration badge)
-    const badges1 = overlay.thumbnailOverlayBadgeViewModel?.thumbnailBadges || [];
-    for (const badge of badges1) {
-      const text = badge.thumbnailBadgeViewModel?.text;
-      if (text && /^\d+:\d+/.test(text)) {
-        result.duration = text;
-      }
-    }
-
-    // Path 2: thumbnailBottomOverlayViewModel (when progress bar exists - indicates partial watch)
-    const bottomOverlay = overlay.thumbnailBottomOverlayViewModel;
-    if (bottomOverlay) {
-      // Check for progress bar
-      const progressBar = bottomOverlay.progressBar?.thumbnailOverlayProgressBarViewModel;
-      if (progressBar?.valueRangeText) {
-        // Format: "X% watched" or similar
-        const match = progressBar.valueRangeText.match(/(\d+)%/);
-        if (match) {
-          result.progressPercent = parseInt(match[1], 10);
-          result.watched = result.progressPercent >= 90;
-        }
-      }
-
-      // Also check badges in bottom overlay for duration
-      const badges2 = bottomOverlay.badges || [];
-      for (const badge of badges2) {
-        const text = badge.thumbnailBadgeViewModel?.text;
-        if (text && /^\d+:\d+/.test(text)) {
-          result.duration = text;
-        }
-      }
-    }
-
-    // Check for "WATCHED" badge in resume playback overlay
-    if (overlay.thumbnailOverlayResumePlaybackRenderer) {
-      result.watched = true;
-      result.progressPercent = 100;
-    }
-  }
-
-  return result;
-}
-
-/**
- * Parse a video from YouTube's newer lockupViewModel format (2024+).
- * This format has a different nested structure with contentId, metadata, and contentImage.
- * @param lockup - lockupViewModel object from YouTube API
- * @returns Parsed Video object or null if not a valid video
- */
-function parseLockupViewModel(lockup: any): Video | null {
-  if (!lockup?.contentId) return null;
-
-  // Skip non-video content (channels, playlists, etc.)
-  const contentType = lockup.contentType;
-  if (contentType && !contentType.includes('VIDEO')) return null;
-
-  const videoId = lockup.contentId;
-  const metadata = lockup.metadata?.lockupMetadataViewModel;
-  const title = metadata?.title?.content || 'Unknown';
-
-  // Get channel name and channelId from metadata
-  let channel = 'Unknown';
-  let channelId = '';
-  let publishedAt = '';
-  const metadataRows = metadata?.metadata?.contentMetadataViewModel?.metadataRows || [];
-  for (const row of metadataRows) {
-    const parts = row.metadataParts || [];
-    for (const part of parts) {
-      const text = part.text?.content || '';
-      // Check for channel name (has navigation endpoint to channel)
-      const browseEndpoint = part.text?.commandRuns?.[0]?.onTap?.innertubeCommand?.browseEndpoint;
-      if (browseEndpoint?.browseId?.startsWith('UC')) {
-        channel = text;
-        channelId = browseEndpoint.browseId;
-      }
-      // Check for publish time (contains "ago" pattern)
-      if (text.toLowerCase().includes('ago')) {
-        publishedAt = text;
-      }
-    }
-  }
-
-  // Extract duration and progress from overlays
-  const { duration, progressPercent, watched } = extractDurationAndProgress(lockup);
-
-  return {
-    id: videoId,
-    title,
-    channel,
-    channelId,
-    thumbnail: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
-    duration,
-    publishedAt,
-    watched,
-    progressPercent,
-  };
 }
 
 /**
@@ -1004,40 +838,6 @@ async function moveToPlaylist(videoId: string, setVideoId: string, targetPlaylis
 
 // Store continuation for channels infinite scroll
 let channelsContinuation: string | null = null;
-
-// Parse relative time text (e.g., "3 days ago") to timestamp
-function parseRelativeTime(text: string): number | undefined {
-  if (!text) return undefined;
-
-  const now = Date.now();
-  const lowerText = text.toLowerCase();
-
-  // Extract number and unit
-  const match = lowerText.match(/(\d+)\s*(second|minute|hour|day|week|month|year)s?\s*ago/);
-  if (!match) {
-    // Check for "streamed X ago" or "Last uploaded X ago" patterns
-    const altMatch = lowerText.match(/(?:streamed|uploaded)\s*(\d+)\s*(second|minute|hour|day|week|month|year)s?\s*ago/);
-    if (!altMatch) return undefined;
-    const [, num, unit] = altMatch;
-    return computeTimestamp(now, parseInt(num, 10), unit);
-  }
-
-  const [, num, unit] = match;
-  return computeTimestamp(now, parseInt(num, 10), unit);
-}
-
-function computeTimestamp(now: number, num: number, unit: string): number {
-  const msPerUnit: Record<string, number> = {
-    second: 1000,
-    minute: 60 * 1000,
-    hour: 60 * 60 * 1000,
-    day: 24 * 60 * 60 * 1000,
-    week: 7 * 24 * 60 * 60 * 1000,
-    month: 30 * 24 * 60 * 60 * 1000,
-    year: 365 * 24 * 60 * 60 * 1000,
-  };
-  return now - num * (msPerUnit[unit] || 0);
-}
 
 // Get subscribed channels
 async function getSubscribedChannels(): Promise<Channel[]> {

@@ -1,7 +1,7 @@
 // Unit tests for YouTube API parsing functions
 // Tests the core parsing logic that extracts video/channel/playlist data from YouTube's InnerTube API
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   mockPlaylistVideoRenderer,
   mockPlaylistVideoRendererMinimal,
@@ -9,211 +9,24 @@ import {
   mockRichItemRenderer,
   mockLockupViewModel,
   mockLockupViewModelWithProgress,
-  mockGridChannelRenderer,
   mockChannelLockupViewModel,
   mockGridPlaylistRenderer,
   mockPlaylistLockupViewModel,
   mockContinuationItemRenderer,
 } from './fixtures/youtube-responses';
-
-// Since the parsing functions are embedded in content.ts, we need to extract them for testing
-// These are re-implementations of the core parsing logic for testability
-
-interface Video {
-  id: string;
-  title: string;
-  channel: string;
-  channelId: string;
-  thumbnail: string;
-  duration: string;
-  publishedAt: string;
-  setVideoId?: string;
-  watched?: boolean;
-  progressPercent?: number;
-}
-
-interface Channel {
-  id: string;
-  name: string;
-  thumbnail: string;
-  subscriberCount: string;
-  videoCount?: string;
-  lastUploadText?: string;
-  lastUploadTimestamp?: number;
-}
+import {
+  parseVideoItem,
+  parseSubscriptionVideoItem,
+  parseLockupViewModel,
+  extractDurationAndProgress,
+  parseRelativeTime,
+} from '../src/parsers';
 
 interface Playlist {
   id: string;
   title: string;
   videoCount: number;
   thumbnail?: string;
-}
-
-// Re-implementation of parseVideoItem for testing
-function parseVideoItem(item: any): Video | null {
-  if (!item) return null;
-  const renderer = item.playlistVideoRenderer || item.playlistPanelVideoRenderer;
-  if (!renderer) return null;
-
-  const videoId = renderer.videoId;
-  if (!videoId) return null;
-
-  return {
-    id: videoId,
-    title: renderer.title?.runs?.[0]?.text || renderer.title?.simpleText || 'Unknown',
-    channel: renderer.shortBylineText?.runs?.[0]?.text || 'Unknown',
-    channelId: renderer.shortBylineText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId || '',
-    thumbnail: renderer.thumbnail?.thumbnails?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
-    duration: renderer.lengthText?.simpleText || renderer.lengthText?.runs?.[0]?.text || '',
-    publishedAt: renderer.publishedTimeText?.simpleText || '',
-    setVideoId: renderer.setVideoId,
-  };
-}
-
-// Re-implementation of parseSubscriptionVideoItem for testing
-function parseSubscriptionVideoItem(item: any): Video | null {
-  if (!item) return null;
-  const videoRenderer =
-    item.videoRenderer ||
-    item.content?.videoRenderer ||
-    item.gridVideoRenderer ||
-    item.compactVideoRenderer;
-
-  if (videoRenderer) {
-    const videoId = videoRenderer.videoId;
-    if (!videoId) return null;
-
-    return {
-      id: videoId,
-      title: videoRenderer.title?.runs?.[0]?.text || videoRenderer.title?.simpleText || 'Unknown',
-      channel: videoRenderer.ownerText?.runs?.[0]?.text ||
-               videoRenderer.shortBylineText?.runs?.[0]?.text ||
-               videoRenderer.longBylineText?.runs?.[0]?.text || 'Unknown',
-      channelId: videoRenderer.ownerText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId ||
-                 videoRenderer.shortBylineText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId ||
-                 videoRenderer.longBylineText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId || '',
-      thumbnail: videoRenderer.thumbnail?.thumbnails?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
-      duration: videoRenderer.lengthText?.simpleText || videoRenderer.lengthText?.runs?.[0]?.text || '',
-      publishedAt: videoRenderer.publishedTimeText?.simpleText || videoRenderer.publishedTimeText?.runs?.[0]?.text || '',
-    };
-  }
-
-  return null;
-}
-
-// Re-implementation of extractDurationAndProgress for testing
-function extractDurationAndProgress(lockup: any): { duration: string; progressPercent: number; watched: boolean } {
-  const result = { duration: '', progressPercent: 0, watched: false };
-
-  const overlays = lockup.contentImage?.thumbnailViewModel?.overlays || [];
-
-  for (const overlay of overlays) {
-    const badges1 = overlay.thumbnailOverlayBadgeViewModel?.thumbnailBadges || [];
-    for (const badge of badges1) {
-      const text = badge.thumbnailBadgeViewModel?.text;
-      if (text && /^\d+:\d+/.test(text)) {
-        result.duration = text;
-      }
-    }
-
-    const bottomOverlay = overlay.thumbnailBottomOverlayViewModel;
-    if (bottomOverlay) {
-      const progressBar = bottomOverlay.progressBar?.thumbnailOverlayProgressBarViewModel;
-      if (progressBar?.valueRangeText) {
-        const match = progressBar.valueRangeText.match(/(\d+)%/);
-        if (match) {
-          result.progressPercent = parseInt(match[1], 10);
-          result.watched = result.progressPercent >= 90;
-        }
-      }
-
-      const badges2 = bottomOverlay.badges || [];
-      for (const badge of badges2) {
-        const text = badge.thumbnailBadgeViewModel?.text;
-        if (text && /^\d+:\d+/.test(text)) {
-          result.duration = text;
-        }
-      }
-    }
-
-    if (overlay.thumbnailOverlayResumePlaybackRenderer) {
-      result.watched = true;
-      result.progressPercent = 100;
-    }
-  }
-
-  return result;
-}
-
-// Re-implementation of parseLockupViewModel for testing
-function parseLockupViewModel(lockup: any): Video | null {
-  if (!lockup?.contentId) return null;
-
-  const contentType = lockup.contentType;
-  if (contentType && !contentType.includes('VIDEO')) return null;
-
-  const videoId = lockup.contentId;
-  const metadata = lockup.metadata?.lockupMetadataViewModel;
-  const title = metadata?.title?.content || 'Unknown';
-
-  let channel = 'Unknown';
-  const metadataRows = metadata?.metadata?.contentMetadataViewModel?.metadataRows || [];
-  for (const row of metadataRows) {
-    const parts = row.metadataParts || [];
-    for (const part of parts) {
-      if (part.text?.content) {
-        channel = part.text.content;
-        break;
-      }
-    }
-    if (channel !== 'Unknown') break;
-  }
-
-  const { duration, progressPercent, watched } = extractDurationAndProgress(lockup);
-
-  return {
-    id: videoId,
-    title,
-    channel,
-    channelId: '',
-    thumbnail: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
-    duration,
-    publishedAt: '',
-    watched,
-    progressPercent,
-  };
-}
-
-// Re-implementation of parseRelativeTime for testing
-function parseRelativeTime(text: string): number | undefined {
-  if (!text) return undefined;
-
-  const now = Date.now();
-  const lowerText = text.toLowerCase();
-
-  const match = lowerText.match(/(\d+)\s*(second|minute|hour|day|week|month|year)s?\s*ago/);
-  if (!match) {
-    const altMatch = lowerText.match(/(?:streamed|uploaded)\s*(\d+)\s*(second|minute|hour|day|week|month|year)s?\s*ago/);
-    if (!altMatch) return undefined;
-    const [, num, unit] = altMatch;
-    return computeTimestamp(now, parseInt(num, 10), unit);
-  }
-
-  const [, num, unit] = match;
-  return computeTimestamp(now, parseInt(num, 10), unit);
-}
-
-function computeTimestamp(now: number, num: number, unit: string): number {
-  const msPerUnit: Record<string, number> = {
-    second: 1000,
-    minute: 60 * 1000,
-    hour: 60 * 60 * 1000,
-    day: 24 * 60 * 60 * 1000,
-    week: 7 * 24 * 60 * 60 * 1000,
-    month: 30 * 24 * 60 * 60 * 1000,
-    year: 365 * 24 * 60 * 60 * 1000,
-  };
-  return now - num * (msPerUnit[unit] || 0);
 }
 
 // ============================================================================
@@ -381,7 +194,7 @@ describe('parseRelativeTime', () => {
     const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
 
     expect(timestamp).toBeDefined();
-    expect(Math.abs((now - timestamp!) - threeDaysMs)).toBeLessThan(1000);
+    expect(Math.abs(now - timestamp! - threeDaysMs)).toBeLessThan(1000);
   });
 
   it('should parse "X hours ago"', () => {
@@ -390,7 +203,7 @@ describe('parseRelativeTime', () => {
     const fiveHoursMs = 5 * 60 * 60 * 1000;
 
     expect(timestamp).toBeDefined();
-    expect(Math.abs((now - timestamp!) - fiveHoursMs)).toBeLessThan(1000);
+    expect(Math.abs(now - timestamp! - fiveHoursMs)).toBeLessThan(1000);
   });
 
   it('should parse "X weeks ago"', () => {
@@ -399,7 +212,7 @@ describe('parseRelativeTime', () => {
     const twoWeeksMs = 2 * 7 * 24 * 60 * 60 * 1000;
 
     expect(timestamp).toBeDefined();
-    expect(Math.abs((now - timestamp!) - twoWeeksMs)).toBeLessThan(1000);
+    expect(Math.abs(now - timestamp! - twoWeeksMs)).toBeLessThan(1000);
   });
 
   it('should parse "streamed X ago"', () => {
@@ -408,7 +221,7 @@ describe('parseRelativeTime', () => {
     const oneHourMs = 60 * 60 * 1000;
 
     expect(timestamp).toBeDefined();
-    expect(Math.abs((now - timestamp!) - oneHourMs)).toBeLessThan(1000);
+    expect(Math.abs(now - timestamp! - oneHourMs)).toBeLessThan(1000);
   });
 
   it('should parse "Last uploaded X ago"', () => {
@@ -417,7 +230,7 @@ describe('parseRelativeTime', () => {
     const fourDaysMs = 4 * 24 * 60 * 60 * 1000;
 
     expect(timestamp).toBeDefined();
-    expect(Math.abs((now - timestamp!) - fourDaysMs)).toBeLessThan(1000);
+    expect(Math.abs(now - timestamp! - fourDaysMs)).toBeLessThan(1000);
   });
 
   it('should return undefined for invalid input', () => {
@@ -432,7 +245,7 @@ describe('parseRelativeTime', () => {
     const oneDayMs = 24 * 60 * 60 * 1000;
 
     expect(timestamp).toBeDefined();
-    expect(Math.abs((now - timestamp!) - oneDayMs)).toBeLessThan(1000);
+    expect(Math.abs(now - timestamp! - oneDayMs)).toBeLessThan(1000);
   });
 });
 
@@ -459,9 +272,12 @@ describe('playlist parsing', () => {
       return null;
     }
 
-    const isPlaylist = lockup.contentType === 'LOCKUP_CONTENT_TYPE_PLAYLIST' ||
-                      obj.collectionThumbnailViewModel ||
-                      lockup.rendererContext?.commandContext?.onTap?.innertubeCommand?.browseEndpoint?.browseId?.startsWith('VL');
+    const isPlaylist =
+      lockup.contentType === 'LOCKUP_CONTENT_TYPE_PLAYLIST' ||
+      obj.collectionThumbnailViewModel ||
+      lockup.rendererContext?.commandContext?.onTap?.innertubeCommand?.browseEndpoint?.browseId?.startsWith(
+        'VL',
+      );
 
     if (!isPlaylist) return null;
 
@@ -532,9 +348,7 @@ describe('playlist parsing', () => {
               contentMetadataViewModel: {
                 metadataRows: [
                   {
-                    metadataParts: [
-                      { text: { content: '1 video' } },
-                    ],
+                    metadataParts: [{ text: { content: '1 video' } }],
                   },
                 ],
               },
@@ -564,9 +378,7 @@ describe('playlist parsing', () => {
               contentMetadataViewModel: {
                 metadataRows: [
                   {
-                    metadataParts: [
-                      { text: { content: 'Public • 42 videos' } },
-                    ],
+                    metadataParts: [{ text: { content: 'Public • 42 videos' } }],
                   },
                 ],
               },
