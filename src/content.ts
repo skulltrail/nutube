@@ -95,6 +95,76 @@ interface InnerTubeContext {
   };
 }
 
+interface NuTubeSettings {
+  operationRetries?: number;
+}
+
+const DEFAULT_CLIENT_VERSION = '2.20250109.00.00';
+const DEFAULT_CLIENT_NAME = 'WEB';
+const DEFAULT_RETRIES = 2;
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+
+let cachedSettings: { value: NuTubeSettings; fetchedAt: number } | null = null;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function getSettings(): Promise<NuTubeSettings> {
+  const now = Date.now();
+  if (cachedSettings && now - cachedSettings.fetchedAt < 30_000) {
+    return cachedSettings.value;
+  }
+
+  const result = await chrome.storage.local.get(['nutubeSettings']);
+  const value = (result.nutubeSettings || {}) as NuTubeSettings;
+  cachedSettings = { value, fetchedAt: now };
+  return value;
+}
+
+function getLocaleParts(): { hl: string; gl: string } {
+  const lang = (document.documentElement.lang || navigator.language || 'en-US').replace('_', '-');
+  const [hlRaw, glRaw] = lang.split('-');
+  const hl = (hlRaw || 'en').toLowerCase();
+  const gl = (glRaw || 'US').toUpperCase();
+  return { hl, gl };
+}
+
+function getClientVersionFromPage(): string {
+  const win = window as any;
+
+  const directCandidates = [
+    win?.ytcfg?.data_?.INNERTUBE_CLIENT_VERSION,
+    typeof win?.ytcfg?.get === 'function' ? win.ytcfg.get('INNERTUBE_CLIENT_VERSION') : undefined,
+    win?.ytInitialData?.responseContext?.mainAppWebResponseContext?.datasyncId,
+  ];
+  for (const candidate of directCandidates) {
+    if (typeof candidate === 'string' && candidate.length >= 8) {
+      return candidate;
+    }
+  }
+
+  for (const script of Array.from(document.scripts)) {
+    const text = script.textContent || '';
+    const match = text.match(/INNERTUBE_CLIENT_VERSION["']?\s*:\s*["']([^"']+)["']/);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return DEFAULT_CLIENT_VERSION;
+}
+
+function buildInnertubeClient(): InnerTubeContext['client'] {
+  const { hl, gl } = getLocaleParts();
+  return {
+    clientName: DEFAULT_CLIENT_NAME,
+    clientVersion: getClientVersionFromPage(),
+    hl,
+    gl,
+  };
+}
+
 // Extract SAPISIDHASH for authentication
 async function getSapisidHash(sapisid: string, origin: string): Promise<string> {
   const timestamp = Math.floor(Date.now() / 1000);
@@ -121,12 +191,7 @@ function getSapisidCookie(): string | null {
 // Build InnerTube context
 function buildContext(): InnerTubeContext {
   return {
-    client: {
-      clientName: 'WEB',
-      clientVersion: '2.20250109.00.00',
-      hl: 'en',
-      gl: 'US',
-    },
+    client: buildInnertubeClient(),
   };
 }
 
@@ -143,27 +208,44 @@ async function innertubeRequest(endpoint: string, body: object): Promise<any> {
 
   const url = `https://www.youtube.com/youtubei/v1/${endpoint}?prettyPrint=false`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': authHeader,
-      'X-Origin': origin,
-      'X-Youtube-Client-Name': '1',
-      'X-Youtube-Client-Version': '2.20250109.00.00',
-    },
-    body: JSON.stringify({
-      context: buildContext(),
-      ...body,
-    }),
-    credentials: 'include',
-  });
+  const context = buildContext();
+  const settings = await getSettings();
+  const maxRetries = Math.max(0, settings.operationRetries ?? DEFAULT_RETRIES);
 
-  if (!response.ok) {
-    throw new Error(`InnerTube API error: ${response.status}`);
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': authHeader,
+        'X-Origin': origin,
+        'X-Youtube-Client-Name': '1',
+        'X-Youtube-Client-Version': context.client.clientVersion,
+      },
+      body: JSON.stringify({
+        context,
+        ...body,
+      }),
+      credentials: 'include',
+    });
+
+    if (response.ok) {
+      return response.json();
+    }
+
+    const shouldRetry = RETRYABLE_STATUS_CODES.has(response.status) && attempt < maxRetries;
+    if (!shouldRetry) {
+      if (response.status === 401 || response.status === 403) {
+        throw new Error('YouTube authentication expired. Refresh youtube.com and try again.');
+      }
+      throw new Error(`InnerTube API error: ${response.status}`);
+    }
+
+    const jitter = Math.floor(Math.random() * 150);
+    const backoffMs = 400 * (2 ** attempt) + jitter;
+    debugLog(`Retrying ${endpoint} after ${response.status} (${attempt}/${maxRetries}) in ${backoffMs}ms`);
+    await sleep(backoffMs);
   }
-
-  return response.json();
 }
 
 // Shared helper: fetch videos from any playlist by browse ID
