@@ -170,6 +170,7 @@ let activePlaylistId = null;
 let playlistVideos = [];
 let filteredPlaylists = [];
 let playlistSortMode = 'default'; // 'default', 'alpha', 'alpha-reverse', 'count-desc', 'count-asc'
+let themePref = 'auto'; // 'auto', 'light', 'dark'
 
 // Undo history
 const undoStack = [];
@@ -353,6 +354,7 @@ function renderShortcuts() {
           { keys: ['y'], desc: 'Copy URL' },
           { keys: ['r'], desc: 'Refresh' },
           { keys: ['Tab'], desc: 'Switch tab' },
+          { keys: ['T'], desc: 'Cycle theme' },
           { keys: ['?'], desc: 'Help' },
         ]
       },
@@ -394,6 +396,7 @@ function renderShortcuts() {
           { keys: ['y'], desc: 'Copy URL' },
           { keys: ['r'], desc: 'Refresh' },
           { keys: ['Tab'], desc: 'Switch tab' },
+          { keys: ['T'], desc: 'Cycle theme' },
           { keys: ['?'], desc: 'Help' },
         ]
       },
@@ -432,6 +435,7 @@ function renderShortcuts() {
           { keys: ['y'], desc: 'Copy URL' },
           { keys: ['r'], desc: 'Refresh' },
           { keys: ['Tab'], desc: 'Switch tab' },
+          { keys: ['T'], desc: 'Cycle theme' },
           { keys: ['?'], desc: 'Help' },
         ]
       },
@@ -468,6 +472,7 @@ function renderShortcuts() {
         shortcuts: [
           { keys: ['r'], desc: 'Refresh' },
           { keys: ['Tab'], desc: 'Switch tab' },
+          { keys: ['T'], desc: 'Cycle theme' },
           { keys: ['?'], desc: 'Help' },
         ]
       },
@@ -599,6 +604,44 @@ async function savePlaylistSortPref() {
   return new Promise((resolve) => {
     chrome.storage.local.set({ playlistSortMode }, resolve);
   });
+}
+
+// Theme preference storage
+async function loadThemePref() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['themePref'], (result) => {
+      themePref = result.themePref || 'auto';
+      resolve();
+    });
+  });
+}
+
+async function saveThemePref() {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ themePref }, resolve);
+  });
+}
+
+function applyTheme() {
+  if (themePref === 'auto') {
+    document.documentElement.removeAttribute('data-theme');
+  } else {
+    document.documentElement.setAttribute('data-theme', themePref);
+  }
+  updateThemeIndicator();
+}
+
+function cycleTheme() {
+  const cycle = { auto: 'light', light: 'dark', dark: 'auto' };
+  themePref = cycle[themePref] || 'auto';
+  applyTheme();
+  saveThemePref();
+  showToast(`Theme: ${themePref}`, 'success');
+}
+
+function updateThemeIndicator() {
+  const el = document.getElementById('theme-indicator');
+  if (el) el.textContent = themePref;
 }
 
 function updateHideWatchedIndicator() {
@@ -3603,6 +3646,9 @@ document.addEventListener('keydown', (e) => {
     if (currentTab === 'playlists' && playlistBrowserLevel === 'list') {
       cycleSortMode();
     }
+  } else if (e.key === 'T') {
+    e.preventDefault();
+    cycleTheme();
   } else if (e.key === 'x' || e.key === 'd' || e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
     if (currentTab === 'watchlater') {
@@ -3945,6 +3991,7 @@ async function loadAllData() {
       loadWatchedOverrides(),
       loadHideWatchedPref(),
       loadPlaylistSortPref(),
+      loadThemePref(),
     ]);
 
     if (wlResult.success) {
@@ -3979,6 +4026,7 @@ async function loadAllData() {
     }
 
     updateHideWatchedIndicator();
+    applyTheme();
 
     // Set current tab's data
     if (currentTab === 'channels') {
@@ -4083,6 +4131,17 @@ document.querySelector('.app')?.addEventListener('click', (e) => {
   // Don't interfere with search input or buttons
   if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
     restoreFocus();
+  }
+});
+
+// Theme indicator click handler
+document.getElementById('theme-indicator')?.addEventListener('click', cycleTheme);
+
+// Apply theme early to prevent flash of wrong theme
+chrome.storage.local.get(['themePref'], (result) => {
+  const pref = result.themePref || 'auto';
+  if (pref !== 'auto') {
+    document.documentElement.setAttribute('data-theme', pref);
   }
 });
 
