@@ -32,8 +32,67 @@
 
 import { MessageType } from './types';
 
+type ControlMessage =
+  | { type: 'OPEN_DASHBOARD' }
+  | { type: 'OPEN_SIDE_PANEL'; tabId?: number };
+
 // Singleton promise to prevent race conditions when multiple messages arrive simultaneously
 let youTubeTabPromise: Promise<chrome.tabs.Tab> | null = null;
+const sidePanelApi = (chrome as any).sidePanel;
+const SIDE_PANEL_PATH = 'dashboard.html?surface=sidepanel';
+
+async function notifyDashboardFocusTarget(surface: 'sidepanel' | 'dashboard'): Promise<void> {
+  try {
+    await chrome.runtime.sendMessage({ type: 'FOCUS_NUTUBE_UI', surface });
+  } catch {
+    // No receiver yet is fine; dashboard may not be open.
+  }
+}
+
+const relayableMessageTypes = new Set<string>([
+  'PING',
+  'GET_WATCH_LATER',
+  'GET_SUBSCRIPTIONS',
+  'GET_MORE_SUBSCRIPTIONS',
+  'GET_PLAYLISTS',
+  'REMOVE_FROM_WATCH_LATER',
+  'ADD_TO_PLAYLIST',
+  'ADD_TO_WATCH_LATER',
+  'MOVE_TO_TOP',
+  'MOVE_TO_BOTTOM',
+  'MOVE_TO_PLAYLIST',
+  'GET_CHANNELS',
+  'GET_MORE_CHANNELS',
+  'UNSUBSCRIBE',
+  'SUBSCRIBE',
+  'GET_CHANNEL_SUGGESTIONS',
+  'GET_CHANNEL_VIDEOS',
+  'GET_PLAYLIST_VIDEOS',
+  'REMOVE_FROM_PLAYLIST',
+  'CREATE_PLAYLIST',
+  'DELETE_PLAYLIST',
+  'RENAME_PLAYLIST',
+  'MOVE_PLAYLIST_VIDEO',
+]);
+
+function isControlMessage(message: unknown): message is ControlMessage {
+  if (!message || typeof message !== 'object') return false;
+  const type = (message as { type?: unknown }).type;
+  return type === 'OPEN_DASHBOARD' || type === 'OPEN_SIDE_PANEL';
+}
+
+function isRelayableMessage(message: unknown): message is MessageType {
+  if (!message || typeof message !== 'object') return false;
+  const type = (message as { type?: unknown }).type;
+  return typeof type === 'string' && relayableMessageTypes.has(type);
+}
+
+function isTrustedExtensionPage(sender: chrome.runtime.MessageSender): boolean {
+  if (sender.id !== chrome.runtime.id || !sender.url) return false;
+
+  const allowedPaths = ['dashboard.html', 'popup.html', 'options.html'];
+  return allowedPaths.some(path => sender.url!.startsWith(chrome.runtime.getURL(path)));
+}
 
 // Find an existing YouTube tab or create one
 async function getYouTubeTab(): Promise<chrome.tabs.Tab> {
@@ -121,16 +180,61 @@ async function sendToContentScript(message: MessageType, retryCount = 0): Promis
 
 // Handle messages from dashboard
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // Only process messages from our extension pages (dashboard), not from content scripts
-  const isFromExtension = sender.url?.startsWith('chrome-extension://');
-  if (!isFromExtension) {
+  // Control commands are allowed from any page in this extension (including content script).
+  if (isControlMessage(message)) {
+    if (sender.id !== chrome.runtime.id) {
+      sendResponse({ success: false, error: 'Untrusted sender.' });
+      return false;
+    }
+
+    if (message.type === 'OPEN_DASHBOARD') {
+      chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
+      sendResponse({ success: true });
+      return false;
+    }
+
+    const openSidePanel = async () => {
+      try {
+        if (!sidePanelApi) {
+          sendResponse({ success: false, error: 'Side panel API unavailable in this browser.' });
+          return;
+        }
+        const tabId = message.tabId ?? sender.tab?.id;
+        if (!tabId) {
+          sendResponse({ success: false, error: 'No tab id for side panel.' });
+          return;
+        }
+        await sidePanelApi.setOptions({
+          tabId,
+          path: SIDE_PANEL_PATH,
+          enabled: true,
+        });
+        await sidePanelApi.open({ tabId });
+        await notifyDashboardFocusTarget('sidepanel');
+        sendResponse({ success: true });
+      } catch (error: any) {
+        sendResponse({ success: false, error: error?.message || String(error) });
+      }
+    };
+
+    openSidePanel();
+    return true;
+  }
+
+  // Only trusted extension pages can relay data operations to content script.
+  if (!isTrustedExtensionPage(sender)) {
+    return false;
+  }
+
+  if (!isRelayableMessage(message)) {
+    sendResponse({ success: false, error: 'Unsupported message type' });
     return false;
   }
 
   // Handle the async operation
   (async () => {
     try {
-      const response = await sendToContentScript(message as MessageType);
+      const response = await sendToContentScript(message);
       sendResponse(response);
     } catch (error: any) {
       sendResponse({ success: false, error: error.message || String(error) });
@@ -146,6 +250,34 @@ chrome.action.onClicked.addListener(() => {
   chrome.tabs.create({
     url: chrome.runtime.getURL('dashboard.html'),
   });
+  notifyDashboardFocusTarget('dashboard');
+});
+
+// Keyboard command handlers for native extension control.
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command === 'open-dashboard') {
+    chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
+    notifyDashboardFocusTarget('dashboard');
+    return;
+  }
+
+  if (command === 'toggle-side-panel') {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) return;
+    if (!sidePanelApi) return;
+
+    try {
+      await sidePanelApi.setOptions({
+        tabId: tab.id,
+        path: SIDE_PANEL_PATH,
+        enabled: true,
+      });
+      await sidePanelApi.open({ tabId: tab.id });
+      await notifyDashboardFocusTarget('sidepanel');
+    } catch (error) {
+      console.warn('[NuTube] Failed to open side panel:', error);
+    }
+  }
 });
 
 console.log('NuTube background service worker loaded');

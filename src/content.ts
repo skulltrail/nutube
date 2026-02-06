@@ -40,7 +40,12 @@
  */
 
 import { MessageType } from './types';
-import { parseVideoItem, parseSubscriptionVideoItem, parseLockupViewModel, parseRelativeTime } from './parsers';
+import {
+  parseVideoItem,
+  parseSubscriptionVideoItem,
+  parseLockupViewModel,
+  parseRelativeTime,
+} from './parsers';
 
 // =============================================================================
 // CONSTANTS
@@ -1324,6 +1329,101 @@ function findVideosInChannelTab(obj: any, videos: Video[], continuation: { token
     }
   }
 }
+
+const COMPANION_LAUNCHER_ID = 'nutube-companion-launcher';
+const COMPANION_STYLE_ID = 'nutube-companion-style';
+
+function injectCompanionStyles(): void {
+  if (document.getElementById(COMPANION_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = COMPANION_STYLE_ID;
+  style.textContent = `
+    #${COMPANION_LAUNCHER_ID} {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      z-index: 2147483647;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 999px;
+      background: rgba(18, 18, 20, 0.88);
+      color: #fff;
+      font: 600 11px/1.2 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      letter-spacing: 0.1px;
+      padding: 8px 11px;
+      cursor: pointer;
+      backdrop-filter: blur(4px);
+    }
+    #${COMPANION_LAUNCHER_ID}:hover {
+      border-color: rgba(255, 68, 68, 0.85);
+      transform: translateY(-1px);
+    }
+    @media (max-width: 780px) {
+      #${COMPANION_LAUNCHER_ID} {
+        right: 10px;
+        bottom: 10px;
+        padding: 7px 10px;
+      }
+    }
+  `;
+  document.documentElement.appendChild(style);
+}
+
+function shouldHideLauncherForPath(pathname: string): boolean {
+  return pathname.startsWith('/embed') || pathname.startsWith('/tv');
+}
+
+function ensureCompanionLauncher(): void {
+  injectCompanionStyles();
+
+  const path = window.location.pathname;
+  const existing = document.getElementById(COMPANION_LAUNCHER_ID);
+  const shouldHide = shouldHideLauncherForPath(path);
+
+  if (shouldHide) {
+    existing?.remove();
+    return;
+  }
+
+  if (existing) return;
+
+  const button = document.createElement('button');
+  button.id = COMPANION_LAUNCHER_ID;
+  button.type = 'button';
+  button.textContent = 'Open NuTube';
+  button.title = 'Open NuTube dashboard (Alt+Shift+N)';
+  button.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'OPEN_DASHBOARD' }).catch(() => {
+      window.open(chrome.runtime.getURL('dashboard.html'), '_blank');
+    });
+  });
+
+  document.documentElement.appendChild(button);
+}
+
+function registerCompanionShortcuts(): void {
+  document.addEventListener('keydown', (event) => {
+    const target = event.target as HTMLElement | null;
+    const isEditable = !!target && (
+      target.tagName === 'INPUT' ||
+      target.tagName === 'TEXTAREA' ||
+      target.isContentEditable
+    );
+    if (isEditable) return;
+
+    if (event.altKey && event.shiftKey && !event.metaKey && !event.ctrlKey && event.key.toLowerCase() === 'n') {
+      event.preventDefault();
+      chrome.runtime.sendMessage({ type: 'OPEN_DASHBOARD' }).catch(() => {
+        window.open(chrome.runtime.getURL('dashboard.html'), '_blank');
+      });
+    }
+  }, { passive: false });
+}
+
+ensureCompanionLauncher();
+registerCompanionShortcuts();
+window.addEventListener('yt-navigate-finish', ensureCompanionLauncher);
+window.addEventListener('popstate', ensureCompanionLauncher);
+setInterval(ensureCompanionLauncher, 5000);
 
 // Listen for messages from background script
 chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendResponse) => {
