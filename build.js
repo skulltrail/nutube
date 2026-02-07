@@ -1,6 +1,5 @@
 import * as esbuild from 'esbuild';
 import { copyFileSync, mkdirSync, existsSync, readdirSync } from 'fs';
-import { dirname } from 'path';
 
 const isWatch = process.argv.includes('--watch');
 
@@ -35,12 +34,19 @@ const contentBuildOptions = {
 
 // Copy static files
 function copyStatic() {
-  copyFileSync('src/manifest.json', 'dist/manifest.json');
-  console.log('✓ Copied manifest.json');
-  copyFileSync('src/dashboard.html', 'dist/dashboard.html');
-  console.log('✓ Copied dashboard.html');
-  copyFileSync('src/dashboard.js', 'dist/dashboard.js');
-  console.log('✓ Copied dashboard.js');
+  const staticFiles = [
+    'manifest.json',
+    'dashboard.html',
+    'dashboard.js',
+    'popup.html',
+    'popup.js',
+    'options.html',
+    'options.js',
+  ];
+  for (const file of staticFiles) {
+    copyFileSync(`src/${file}`, `dist/${file}`);
+    console.log(`✓ Copied ${file}`);
+  }
 
   // Copy icons from assets to dist
   if (!existsSync('dist/icons')) {

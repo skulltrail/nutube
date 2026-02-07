@@ -59,6 +59,12 @@ npm run build
 
 - ✂️ **Audit Your Subscriptions** — Subscribed to 500 channels but only watch 50? YouTube makes unsubscribing a chore. NuTube shows all your channels in one list with activity indicators. See who's gone dormant. Batch-unsubscribe the noise.
 
+- 🧠 **Smart Queue Ranking + Fuzzy Search** — Rank what to watch next by recency/progress/duration fit with `I`, and find items with typo-tolerant fuzzy search across title/channel/tags/notes.
+
+- 🧩 **Companion Everywhere** — Open NuTube from popup, side panel, global keyboard command, or directly inside YouTube via floating launcher and `Alt+Shift+N`.
+
+- 💾 **Portable Backups** — Export/import settings, assignments, watched overrides, hidden videos, and annotations with keyboard shortcuts.
+
 - 🔒 **Privacy-First** — YouTube only, no external services. Zero tracking, no analytics or telemetry. Everything runs locally in your browser. Open source — audit it yourself.
 
 - ⌨️ **Built for Power Users** — Vim keybindings, visual selection mode, undo support, dark terminal aesthetic.
@@ -146,19 +152,21 @@ NuTube speaks directly to YouTube's **InnerTube API** — the same protocol powe
 
 ### Features
 
-- [ ] Dark/light theme toggle
+- [x] Dark/light theme toggle
 - [ ] Export Watch Later to text/JSON
-- [ ] Playlist reordering
+- [x] Playlist reordering
 - [ ] Video preview on hover
 - [ ] Full video playback in dashboard
-- [ ] Bulk operations progress indicator
+- [x] Bulk operations progress indicator
+- [x] Side panel + popup companion
+- [x] Fuzzy search and smart queue ranking
 
 ### Improvements
 
-- [ ] Better error handling for rate limits
-- [ ] Retry logic for failed operations
-- [ ] Keyboard shortcut customization
-- [ ] Remember last used tab
+- [x] Better error handling for rate limits
+- [x] Retry logic for failed operations
+- [x] Keyboard shortcut customization (settings-driven keymap)
+- [x] Remember last used tab
 
 ---
 

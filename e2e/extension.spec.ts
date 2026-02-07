@@ -140,6 +140,10 @@ test.describe('NuTube Extension', () => {
       'content.js',
       'dashboard.html',
       'dashboard.js',
+      'popup.html',
+      'popup.js',
+      'options.html',
+      'options.js',
     ];
 
     for (const file of requiredFiles) {
