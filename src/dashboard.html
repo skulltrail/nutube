@@ -126,18 +126,28 @@
 
     /* Header */
     header {
-      padding: 16px 24px;
+      padding: 12px 16px 10px;
       border-bottom: 1px solid var(--border-color);
+      display: grid;
+      grid-template-rows: auto auto;
+      gap: 8px;
+      background: var(--bg-secondary);
+      min-width: 0;
+    }
+
+    .header-top {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      background: var(--bg-secondary);
+      gap: 10px;
+      min-width: 0;
     }
 
     .logo {
       display: flex;
       align-items: center;
       gap: 12px;
+      min-width: 0;
     }
 
     .logo-icon {
@@ -152,25 +162,101 @@
       font-weight: 600;
       font-size: 18px;
       letter-spacing: -0.5px;
+      white-space: nowrap;
     }
 
     /* Tab Navigation */
+    .tab-strip-wrap {
+      display: grid;
+      grid-template-columns: 24px 1fr 24px;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      position: relative;
+    }
+
+    .tab-shift {
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-tertiary);
+      color: var(--text-secondary);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      opacity: 0;
+      pointer-events: none;
+      transform: scale(0.9);
+      transition: opacity 0.15s, transform 0.15s, color 0.15s, border-color 0.15s;
+      font-size: 14px;
+      line-height: 1;
+    }
+
+    .tab-shift.visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: scale(1);
+    }
+
+    .tab-shift:hover {
+      color: var(--text-primary);
+      border-color: var(--accent);
+    }
+
     .nav-tabs {
       display: flex;
-      gap: 4px;
-      margin-left: 32px;
+      gap: 6px;
+      margin-left: 0;
+      min-width: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+      scroll-behavior: smooth;
+      scroll-snap-type: x mandatory;
+      padding: 2px 0;
+    }
+
+    .nav-tabs::-webkit-scrollbar {
+      display: none;
     }
 
     .nav-tab {
-      padding: 8px 16px;
+      padding: 7px 13px;
       background: transparent;
       border: 1px solid transparent;
-      border-radius: 4px;
+      border-radius: 999px;
       color: var(--text-secondary);
       font-family: var(--font-mono);
       font-size: 12px;
       cursor: pointer;
-      transition: all 0.15s;
+      transition: transform 0.2s, opacity 0.2s, background 0.15s, border-color 0.15s, color 0.15s;
+      flex: 0 0 auto;
+      transform-origin: center;
+      white-space: nowrap;
+      scroll-snap-align: center;
+      opacity: 0.85;
+    }
+
+    .nav-tab.rolodex-active {
+      transform: translateY(0) scale(1);
+      opacity: 1;
+    }
+
+    .nav-tab.rolodex-before {
+      transform: translateX(-2px) scale(0.94) rotateY(14deg);
+      opacity: 0.72;
+    }
+
+    .nav-tab.rolodex-after {
+      transform: translateX(2px) scale(0.94) rotateY(-14deg);
+      opacity: 0.72;
+    }
+
+    .nav-tab.rolodex-far {
+      opacity: 0.56;
     }
 
     .nav-tab:hover {
@@ -200,9 +286,12 @@
 
     .stats {
       display: flex;
-      gap: 24px;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
       font-size: 12px;
       color: var(--text-secondary);
+      min-width: 0;
     }
 
     .stat {
@@ -904,6 +993,63 @@
       }
     }
 
+    /* Custom right-click menu for mouse-driven actions */
+    .context-menu {
+      position: fixed;
+      z-index: 1200;
+      min-width: 190px;
+      max-width: 260px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.38);
+      padding: 6px;
+      display: none;
+    }
+
+    .context-menu.visible {
+      display: block;
+    }
+
+    .context-menu-items {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .context-menu-item {
+      width: 100%;
+      text-align: left;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-primary);
+      border-radius: 6px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.25;
+      padding: 8px 10px;
+      cursor: pointer;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .context-menu-item:hover:enabled,
+    .context-menu-item:focus-visible:enabled {
+      background: var(--bg-hover);
+      border-color: var(--border-color);
+      outline: none;
+    }
+
+    .context-menu-item.danger {
+      color: var(--accent);
+    }
+
+    .context-menu-item:disabled {
+      opacity: 0.48;
+      cursor: not-allowed;
+    }
+
     /* Channel items */
     .channel-item {
       display: grid;
@@ -1569,36 +1715,42 @@
 <body tabindex="-1">
   <div class="app">
     <header>
-      <div class="logo">
-        <img class="logo-icon" src="icons/icon48.png" alt="NuTube">
-        <span class="logo-text">NuTube</span>
+      <div class="header-top">
+        <div class="logo">
+          <img class="logo-icon" src="icons/icon48.png" alt="NuTube">
+          <span class="logo-text">NuTube</span>
+        </div>
+        <div class="stats">
+          <div class="stat">
+            <span id="video-count-label">Videos:</span>
+            <span class="stat-value" id="video-count">-</span>
+          </div>
+          <div class="stat">
+            <span>Selected:</span>
+            <span class="stat-value" id="selected-count">0</span>
+          </div>
+          <div class="stat">
+            <span class="hide-watched-indicator" id="hide-watched-indicator">Hiding watched</span>
+          </div>
+        </div>
       </div>
-      <nav class="nav-tabs">
-        <button class="nav-tab" data-tab="playlists" id="tab-playlists">
-          Playlists<span class="tab-count" id="playlists-count">-</span>
-        </button>
-        <button class="nav-tab active" data-tab="watchlater" id="tab-watchlater">
-          Watch Later<span class="tab-count" id="watchlater-count">-</span>
-        </button>
-        <button class="nav-tab" data-tab="subscriptions" id="tab-subscriptions">
-          Subscriptions<span class="tab-count" id="subscriptions-count">-</span><span class="loading-indicator" id="subscriptions-loading"></span>
-        </button>
-        <button class="nav-tab" data-tab="channels" id="tab-channels">
-          Channels<span class="tab-count" id="channels-count">-</span>
-        </button>
-      </nav>
-      <div class="stats">
-        <div class="stat">
-          <span id="video-count-label">Videos:</span>
-          <span class="stat-value" id="video-count">-</span>
-        </div>
-        <div class="stat">
-          <span>Selected:</span>
-          <span class="stat-value" id="selected-count">0</span>
-        </div>
-        <div class="stat">
-          <span class="hide-watched-indicator" id="hide-watched-indicator">Hiding watched</span>
-        </div>
+      <div class="tab-strip-wrap">
+        <button class="tab-shift tab-shift-before" id="tab-shift-before" type="button" aria-label="Scroll tabs left">&#x2039;</button>
+        <nav class="nav-tabs" id="tab-strip">
+          <button class="nav-tab" data-tab="playlists" id="tab-playlists">
+            Playlists<span class="tab-count" id="playlists-count">-</span>
+          </button>
+          <button class="nav-tab active" data-tab="watchlater" id="tab-watchlater">
+            Watch Later<span class="tab-count" id="watchlater-count">-</span>
+          </button>
+          <button class="nav-tab" data-tab="subscriptions" id="tab-subscriptions">
+            Subscriptions<span class="tab-count" id="subscriptions-count">-</span><span class="loading-indicator" id="subscriptions-loading"></span>
+          </button>
+          <button class="nav-tab" data-tab="channels" id="tab-channels">
+            Channels<span class="tab-count" id="channels-count">-</span>
+          </button>
+        </nav>
+        <button class="tab-shift tab-shift-after" id="tab-shift-after" type="button" aria-label="Scroll tabs right">&#x203A;</button>
       </div>
     </header>
 
@@ -1794,6 +1946,11 @@
 
   <!-- Toast Container -->
   <div class="toast-container" id="toast-container"></div>
+
+  <!-- Context Menu -->
+  <div class="context-menu" id="context-menu">
+    <div class="context-menu-items" id="context-menu-items"></div>
+  </div>
 
   <script src="dashboard.js"></script>
 </body>
