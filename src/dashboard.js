@@ -138,6 +138,7 @@ let suggestionsFocusedIndex = 0;
 let isSuggestionsOpen = false;
 let isConfirmOpen = false;
 let confirmCallback = null;
+let confirmResolver = null;
 
 // Channel preview state
 let channelVideoFocusIndex = 0;
@@ -164,6 +165,21 @@ let watchedOverrides = {};
 // Global hide-watched toggle (persisted)
 let hideWatched = false;
 
+const DEFAULT_SETTINGS = {
+  defaultTab: 'watchlater',
+  operationConcurrency: 4,
+  operationRetries: 2,
+  fuzzyThreshold: 0.45,
+  keymap: {
+    delete: 'x',
+    move: 'm',
+    refresh: 'r',
+  },
+};
+let nutubeSettings = { ...DEFAULT_SETTINGS };
+let smartSortEnabled = false;
+let videoAnnotations = {};
+
 // Playlist browser state (two-level drill-down)
 let playlistBrowserLevel = 'list'; // 'list' (Level 1) or 'videos' (Level 2)
 let activePlaylistId = null;
@@ -174,6 +190,9 @@ let themePref = 'auto'; // 'auto', 'light', 'dark'
 
 // Undo history
 const undoStack = [];
+
+// Surface mode
+const isSidePanelSurface = new URLSearchParams(window.location.search).get('surface') === 'sidepanel';
 
 // =============================================================================
 // LOOKUP HELPERS
@@ -254,7 +273,12 @@ const searchContainer = document.querySelector('.search-container');
 const modalOverlay = document.getElementById('modal-overlay');
 const modalPlaylists = document.getElementById('modal-playlists');
 const toastContainer = document.getElementById('toast-container');
+const contextMenuEl = document.getElementById('context-menu');
+const contextMenuItemsEl = document.getElementById('context-menu-items');
 const helpModal = document.getElementById('help-modal');
+const tabStrip = document.getElementById('tab-strip');
+const tabShiftBefore = document.getElementById('tab-shift-before');
+const tabShiftAfter = document.getElementById('tab-shift-after');
 const tabWatchLater = document.getElementById('tab-watchlater');
 const tabSubscriptions = document.getElementById('tab-subscriptions');
 const tabChannels = document.getElementById('tab-channels');
@@ -274,6 +298,8 @@ const tabPlaylists = document.getElementById('tab-playlists');
 const playlistsCountEl = document.getElementById('playlists-count');
 const breadcrumbEl = document.getElementById('breadcrumb');
 const breadcrumbNameEl = document.getElementById('breadcrumb-name');
+
+let contextMenuActions = [];
 
 // Loading indicator helpers
 function showSubscriptionsLoading() {
@@ -307,6 +333,91 @@ function setLoadMoreState(state) {
     default:
       // hidden
       break;
+  }
+}
+
+function setSingleFocusedSelection(index) {
+  focusedIndex = index;
+  selectedIndices.clear();
+  visualModeStart = null;
+  visualBlockMode = false;
+  updateMode();
+}
+
+function getFocusedVideoUrl(video) {
+  if (!video) return '';
+  return currentTab === 'watchlater'
+    ? getWatchLaterVideoUrl(video)
+    : `https://www.youtube.com/watch?v=${video.id}`;
+}
+
+function getFocusedChannelUrl(channel) {
+  if (!channel) return '';
+  return `https://www.youtube.com/channel/${channel.id}`;
+}
+
+function forceDashboardFocus() {
+  if (document.activeElement === searchInput) return;
+  try {
+    window.focus();
+  } catch (_) {
+    // Some browsers block programmatic focus shifts.
+  }
+  document.body.focus({ preventScroll: true });
+}
+
+function requestDashboardFocus() {
+  forceDashboardFocus();
+  // Side panel focus can land asynchronously; retry briefly.
+  setTimeout(forceDashboardFocus, 30);
+  setTimeout(forceDashboardFocus, 120);
+}
+
+function hideContextMenu() {
+  if (!contextMenuEl) return;
+  contextMenuEl.classList.remove('visible');
+  contextMenuActions = [];
+}
+
+function showContextMenu(clientX, clientY, items) {
+  if (!contextMenuEl || !contextMenuItemsEl || !items || items.length === 0) return;
+  contextMenuActions = items;
+  contextMenuItemsEl.innerHTML = items.map((item, index) => `
+    <button class="context-menu-item ${item.danger ? 'danger' : ''}" data-action-index="${index}" ${item.disabled ? 'disabled' : ''}>
+      ${escapeHtml(item.label)}
+    </button>
+  `).join('');
+
+  contextMenuEl.classList.add('visible');
+  contextMenuEl.style.left = '0px';
+  contextMenuEl.style.top = '0px';
+
+  const margin = 8;
+  const menuRect = contextMenuEl.getBoundingClientRect();
+  const maxLeft = window.innerWidth - menuRect.width - margin;
+  const maxTop = window.innerHeight - menuRect.height - margin;
+  const left = Math.max(margin, Math.min(clientX, maxLeft));
+  const top = Math.max(margin, Math.min(clientY, maxTop));
+  contextMenuEl.style.left = `${left}px`;
+  contextMenuEl.style.top = `${top}px`;
+
+  const firstButton = contextMenuItemsEl.querySelector('.context-menu-item:not(:disabled)');
+  if (firstButton) {
+    firstButton.focus();
+  }
+}
+
+function runContextMenuAction(actionIndex) {
+  const actionItem = contextMenuActions[actionIndex];
+  hideContextMenu();
+  if (!actionItem || typeof actionItem.action !== 'function') return;
+  try {
+    const maybePromise = actionItem.action();
+    if (maybePromise && typeof maybePromise.catch === 'function') {
+      maybePromise.catch(error => errorLog('Context menu action failed:', error));
+    }
+  } catch (error) {
+    errorLog('Context menu action failed:', error);
   }
 }
 
@@ -352,6 +463,9 @@ function renderShortcuts() {
         shortcuts: [
           { keys: ['o', '↵'], desc: 'Open' },
           { keys: ['y'], desc: 'Copy URL' },
+          { keys: ['e'], desc: 'Edit note/tags' },
+          { keys: ['I'], desc: 'Smart sort' },
+          { keys: ['B', 'L'], desc: 'Backup exp/import' },
           { keys: ['r'], desc: 'Refresh' },
           { keys: ['Tab'], desc: 'Switch tab' },
           { keys: ['T'], desc: 'Cycle theme' },
@@ -394,6 +508,9 @@ function renderShortcuts() {
         shortcuts: [
           { keys: ['o', '↵'], desc: 'Open' },
           { keys: ['y'], desc: 'Copy URL' },
+          { keys: ['e'], desc: 'Edit note/tags' },
+          { keys: ['I'], desc: 'Smart sort' },
+          { keys: ['B', 'L'], desc: 'Backup exp/import' },
           { keys: ['r'], desc: 'Refresh' },
           { keys: ['Tab'], desc: 'Switch tab' },
           { keys: ['T'], desc: 'Cycle theme' },
@@ -433,6 +550,7 @@ function renderShortcuts() {
         shortcuts: [
           { keys: ['o', '↵'], desc: 'Open channel' },
           { keys: ['y'], desc: 'Copy URL' },
+          { keys: ['B', 'L'], desc: 'Backup exp/import' },
           { keys: ['r'], desc: 'Refresh' },
           { keys: ['Tab'], desc: 'Switch tab' },
           { keys: ['T'], desc: 'Cycle theme' },
@@ -471,6 +589,9 @@ function renderShortcuts() {
         title: 'Other',
         shortcuts: [
           { keys: ['r'], desc: 'Refresh' },
+          { keys: ['e'], desc: 'Edit note/tags' },
+          { keys: ['I'], desc: 'Smart sort' },
+          { keys: ['B', 'L'], desc: 'Backup exp/import' },
           { keys: ['Tab'], desc: 'Switch tab' },
           { keys: ['T'], desc: 'Cycle theme' },
           { keys: ['?'], desc: 'Help' },
@@ -507,6 +628,18 @@ function sendMessage(message) {
     });
   });
 }
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (!message || message.type !== 'FOCUS_NUTUBE_UI') return;
+  const targetSurface = message.surface;
+  if (targetSurface === 'sidepanel' && isSidePanelSurface) {
+    requestDashboardFocus();
+    return;
+  }
+  if (targetSurface === 'dashboard' && !isSidePanelSurface) {
+    requestDashboardFocus();
+  }
+});
 
 // Quick move storage
 async function loadQuickMoveAssignments() {
@@ -622,6 +755,72 @@ async function saveThemePref() {
   });
 }
 
+async function loadSmartSortPref() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['smartSortEnabled'], (result) => {
+      smartSortEnabled = result.smartSortEnabled === true;
+      resolve();
+    });
+  });
+}
+
+async function saveSmartSortPref() {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ smartSortEnabled }, resolve);
+  });
+}
+
+async function loadNuTubeSettings() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['nutubeSettings'], (result) => {
+      const loaded = result.nutubeSettings || {};
+      nutubeSettings = {
+        ...DEFAULT_SETTINGS,
+        ...loaded,
+        keymap: {
+          ...DEFAULT_SETTINGS.keymap,
+          ...(loaded.keymap || {}),
+        },
+      };
+      resolve();
+    });
+  });
+}
+
+async function loadLastTabPref() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['lastActiveTab'], (result) => {
+      const candidate = result.lastActiveTab || nutubeSettings.defaultTab;
+      const valid = ['watchlater', 'subscriptions', 'channels', 'playlists'];
+      if (valid.includes(candidate)) {
+        currentTab = candidate;
+      }
+      resolve();
+    });
+  });
+}
+
+async function saveLastTabPref() {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ lastActiveTab: currentTab }, resolve);
+  });
+}
+
+async function loadVideoAnnotations() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['videoAnnotations'], (result) => {
+      videoAnnotations = result.videoAnnotations || {};
+      resolve();
+    });
+  });
+}
+
+async function saveVideoAnnotations() {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ videoAnnotations }, resolve);
+  });
+}
+
 function applyTheme() {
   if (themePref === 'auto') {
     document.documentElement.removeAttribute('data-theme');
@@ -648,6 +847,144 @@ function updateHideWatchedIndicator() {
   if (hideWatchedIndicatorEl) {
     hideWatchedIndicatorEl.classList.toggle('active', hideWatched);
   }
+}
+
+function normalizeText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function getVideoAnnotation(videoId) {
+  return videoAnnotations[videoId] || { note: '', tags: [] };
+}
+
+function fuzzyScore(query, text) {
+  const q = normalizeText(query);
+  const t = normalizeText(text);
+  if (!q || !t) return 0;
+  if (t.includes(q)) {
+    return 0.85 + Math.min(0.14, q.length / Math.max(20, t.length));
+  }
+
+  let qi = 0;
+  let contiguous = 0;
+  let maxContiguous = 0;
+  let firstMatch = -1;
+  for (let i = 0; i < t.length && qi < q.length; i++) {
+    if (t[i] === q[qi]) {
+      if (firstMatch === -1) firstMatch = i;
+      contiguous += 1;
+      maxContiguous = Math.max(maxContiguous, contiguous);
+      qi += 1;
+    } else {
+      contiguous = 0;
+    }
+  }
+
+  if (qi < q.length) return 0;
+
+  const coverage = q.length / t.length;
+  const contiguity = maxContiguous / q.length;
+  const positionBoost = firstMatch === -1 ? 0 : 1 - (firstMatch / Math.max(1, t.length));
+  return (coverage * 0.35) + (contiguity * 0.35) + (positionBoost * 0.3);
+}
+
+function buildSearchableText(video) {
+  const annotation = getVideoAnnotation(video.id);
+  return [
+    video.title,
+    video.channel,
+    annotation.note,
+    ...(annotation.tags || []),
+  ].filter(Boolean).join(' ');
+}
+
+function fuzzyMatchVideo(query, video) {
+  const searchable = buildSearchableText(video);
+  const score = fuzzyScore(query, searchable);
+  return score >= (nutubeSettings.fuzzyThreshold || DEFAULT_SETTINGS.fuzzyThreshold) ? score : 0;
+}
+
+function parseDurationSeconds(duration) {
+  if (!duration || typeof duration !== 'string' || !duration.includes(':')) return null;
+  const parts = duration.split(':').map(Number);
+  if (parts.some(Number.isNaN)) return null;
+  if (parts.length === 2) {
+    return parts[0] * 60 + parts[1];
+  }
+  if (parts.length === 3) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
+  return null;
+}
+
+function scoreVideo(video) {
+  // Higher score means "watch now". Bias toward unwatched, recent, and medium-length videos.
+  const progress = getWatchedProgress(video);
+  const watchedPenalty = progress >= 100 ? -1.8 : 0;
+  const halfWatchedBoost = progress > 0 && progress < 100 ? 0.7 : 0;
+
+  const durationSeconds = parseDurationSeconds(video.duration);
+  let durationScore = 0;
+  if (durationSeconds !== null) {
+    // Best around ~12 minutes, taper as videos get much shorter/longer.
+    const preferred = 12 * 60;
+    durationScore = 1 - Math.min(1, Math.abs(durationSeconds - preferred) / preferred);
+  }
+
+  const ts = parseRelativeTime(video.publishedAt);
+  let recencyScore = 0;
+  if (ts) {
+    const ageDays = Math.max(0, (Date.now() - ts) / (24 * 60 * 60 * 1000));
+    recencyScore = 1 / (1 + ageDays / 5);
+  }
+
+  return (durationScore * 0.35) + (recencyScore * 0.55) + halfWatchedBoost + watchedPenalty;
+}
+
+async function runWithConcurrency(items, worker, options = {}) {
+  const configuredConcurrency = options.concurrency ?? nutubeSettings.operationConcurrency ?? DEFAULT_SETTINGS.operationConcurrency;
+  const configuredRetries = options.retries ?? nutubeSettings.operationRetries ?? DEFAULT_SETTINGS.operationRetries;
+  const concurrency = Math.max(1, Math.min(8, configuredConcurrency));
+  const retries = Math.max(0, Math.min(5, configuredRetries));
+  const results = new Array(items.length);
+
+  async function runOne(index) {
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try {
+        results[index] = await worker(items[index], index);
+        return;
+      } catch (error) {
+        if (attempt === retries) {
+          results[index] = { success: false, error: String(error) };
+          return;
+        }
+        const delayMs = 300 * (2 ** attempt) + Math.floor(Math.random() * 120);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (cursor < items.length) {
+      const idx = cursor++;
+      await runOne(idx);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
+function mappedKey(action, fallback) {
+  const value = nutubeSettings?.keymap?.[action];
+  if (!value || typeof value !== 'string' || value.length !== 1) {
+    return fallback;
+  }
+  return value;
 }
 
 /**
@@ -704,6 +1041,13 @@ function toggleHideWatched() {
   renderVideos();
   const state = hideWatched ? 'Hiding' : 'Showing';
   showToast(`${state} watched videos`, 'success');
+}
+
+function toggleSmartSort() {
+  smartSortEnabled = !smartSortEnabled;
+  saveSmartSortPref();
+  renderCurrentView();
+  showToast(smartSortEnabled ? 'Smart queue ranking enabled' : 'Smart queue ranking disabled', 'success');
 }
 
 // Update mode indicator in footer
@@ -765,10 +1109,70 @@ function showToast(message, type = 'info') {
 }
 
 // Tab switching
+function updateTabStateUI(tab, behavior = 'smooth') {
+  tabWatchLater.classList.toggle('active', tab === 'watchlater');
+  tabSubscriptions.classList.toggle('active', tab === 'subscriptions');
+  tabChannels.classList.toggle('active', tab === 'channels');
+  tabPlaylists.classList.toggle('active', tab === 'playlists');
+
+  updateTabRolodexClasses();
+  centerActiveTab(behavior);
+}
+
+function getTabButtons() {
+  return [tabPlaylists, tabWatchLater, tabSubscriptions, tabChannels].filter(Boolean);
+}
+
+function updateTabRolodexClasses() {
+  const tabs = getTabButtons();
+  if (tabs.length === 0) return;
+
+  const activeIndex = tabs.findIndex(tab => tab.classList.contains('active'));
+  tabs.forEach((tab, index) => {
+    tab.classList.remove('rolodex-active', 'rolodex-before', 'rolodex-after', 'rolodex-far');
+    if (index === activeIndex) {
+      tab.classList.add('rolodex-active');
+      return;
+    }
+
+    if (index < activeIndex) {
+      tab.classList.add('rolodex-before');
+      if (activeIndex - index > 1) {
+        tab.classList.add('rolodex-far');
+      }
+      return;
+    }
+
+    tab.classList.add('rolodex-after');
+    if (index - activeIndex > 1) {
+      tab.classList.add('rolodex-far');
+    }
+  });
+}
+
+function updateTabOverflowIndicators() {
+  if (!tabStrip) return;
+  const epsilon = 2;
+  const hasBefore = tabStrip.scrollLeft > epsilon;
+  const hasAfter = (tabStrip.scrollLeft + tabStrip.clientWidth) < (tabStrip.scrollWidth - epsilon);
+  tabShiftBefore?.classList.toggle('visible', hasBefore);
+  tabShiftAfter?.classList.toggle('visible', hasAfter);
+}
+
+function centerActiveTab(behavior = 'auto') {
+  if (!tabStrip) return;
+  const activeTab = tabStrip.querySelector('.nav-tab.active');
+  if (!activeTab) return;
+  activeTab.scrollIntoView({ block: 'nearest', inline: 'center', behavior });
+  updateTabOverflowIndicators();
+}
+
 function switchTab(tab) {
   if (tab === currentTab) return;
 
+  hideContextMenu();
   currentTab = tab;
+  saveLastTabPref();
   selectedIndices.clear();
   focusedIndex = 0;
   visualModeStart = null;
@@ -778,10 +1182,7 @@ function switchTab(tab) {
   searchContainer?.classList.remove('active');
 
   // Update tab UI
-  tabWatchLater.classList.toggle('active', tab === 'watchlater');
-  tabSubscriptions.classList.toggle('active', tab === 'subscriptions');
-  tabChannels.classList.toggle('active', tab === 'channels');
-  tabPlaylists.classList.toggle('active', tab === 'playlists');
+  updateTabStateUI(tab, 'smooth');
   renderShortcuts();
 
   // Hide breadcrumb when leaving playlists tab
@@ -804,16 +1205,31 @@ function switchTab(tab) {
     }
     renderVideos();
   }
+
+  const needsLoad =
+    (tab === 'watchlater' && watchLaterVideos.length === 0) ||
+    (tab === 'subscriptions' && subscriptionVideos.length === 0) ||
+    (tab === 'channels' && channels.length === 0) ||
+    (tab === 'playlists' && playlists.length === 0);
+  if (needsLoad) {
+    loadData();
+  }
   setStatus('Ready');
 }
 
 // Playlist browser rendering (Level 1)
 function renderPlaylistBrowser() {
   // Apply search filter to playlists
-  const query = searchQuery.toLowerCase();
-  filteredPlaylists = query
-    ? playlists.filter(p => p.title.toLowerCase().includes(query))
-    : [...playlists];
+  const query = searchQuery.trim();
+  if (query) {
+    const scored = playlists
+      .map(playlist => ({ playlist, score: fuzzyScore(query, playlist.title) }))
+      .filter(item => item.score >= (nutubeSettings.fuzzyThreshold || DEFAULT_SETTINGS.fuzzyThreshold))
+      .sort((a, b) => b.score - a.score);
+    filteredPlaylists = scored.map(item => item.playlist);
+  } else {
+    filteredPlaylists = [...playlists];
+  }
 
   // Apply sorting
   filteredPlaylists = applySortToPlaylists(filteredPlaylists);
@@ -842,15 +1258,6 @@ function renderPlaylistBrowser() {
   videoCountEl.textContent = filteredPlaylists.length;
   videoCountLabelEl.textContent = 'Playlists:';
   selectedCountEl.textContent = '0';
-
-  // Add click handlers
-  const items = videoList.querySelectorAll('.playlist-browser-item');
-  items.forEach((item, index) => {
-    item.addEventListener('click', () => {
-      focusedIndex = index;
-      drillIntoPlaylist(filteredPlaylists[index]);
-    });
-  });
 
   // Scroll focused into view
   const focusedEl = videoList.querySelector('.playlist-browser-item.focused');
@@ -927,6 +1334,113 @@ function renderCurrentView() {
   }
 }
 
+function buildVideoContextMenuItems(video) {
+  const items = [
+    {
+      label: 'Open in YouTube',
+      action: () => {
+        const url = getFocusedVideoUrl(video);
+        if (url) window.open(url, '_blank');
+      },
+    },
+    {
+      label: 'Copy URL',
+      action: async () => {
+        const url = getFocusedVideoUrl(video);
+        if (!url) return;
+        try {
+          await navigator.clipboard.writeText(url);
+          showToast('URL copied to clipboard', 'success');
+        } catch (_) {
+          showToast('Failed to copy URL', 'error');
+        }
+      },
+    },
+    {
+      label: 'Edit note/tags',
+      action: () => editFocusedVideoAnnotation(),
+    },
+    {
+      label: isFullyWatched(video) ? 'Mark as Unwatched' : 'Mark as Watched',
+      action: () => toggleWatched(),
+    },
+  ];
+
+  if (currentTab === 'watchlater') {
+    items.push(
+      { label: 'Move to Playlist...', action: () => openModal() },
+      { label: 'Move to Top', action: () => moveToTop() },
+      { label: 'Move to Bottom', action: () => moveToBottom() },
+      { label: 'Delete from Watch Later', action: () => deleteVideos(), danger: true },
+    );
+  } else if (currentTab === 'subscriptions') {
+    items.push(
+      { label: isInWatchLater(video.id) ? 'Remove from Watch Later' : 'Toggle Watch Later', action: () => toggleWatchLater() },
+      { label: 'Add to Playlist...', action: () => openModal() },
+      { label: 'Hide Video', action: () => toggleHideVideo(), danger: true },
+    );
+  } else if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
+    items.push(
+      { label: 'Move to Another Playlist...', action: () => openModal() },
+      { label: 'Remove from Playlist', action: () => deleteFromPlaylist(), danger: true },
+    );
+  }
+
+  return items;
+}
+
+function buildChannelContextMenuItems(channel) {
+  return [
+    {
+      label: 'Open Channel',
+      action: () => {
+        const url = getFocusedChannelUrl(channel);
+        if (url) window.open(url, '_blank');
+      },
+    },
+    {
+      label: 'Copy Channel URL',
+      action: async () => {
+        const url = getFocusedChannelUrl(channel);
+        if (!url) return;
+        try {
+          await navigator.clipboard.writeText(url);
+          showToast('URL copied to clipboard', 'success');
+        } catch (_) {
+          showToast('Failed to copy URL', 'error');
+        }
+      },
+    },
+    {
+      label: 'Preview Channel',
+      action: () => openChannelPreview(channel),
+    },
+    {
+      label: 'Unsubscribe',
+      action: () => confirmUnsubscribe(channel),
+      danger: true,
+    },
+  ];
+}
+
+function buildPlaylistContextMenuItems(playlist) {
+  return [
+    {
+      label: 'Open Playlist',
+      action: () => drillIntoPlaylist(playlist),
+    },
+    {
+      label: 'Rename Playlist',
+      action: () => renameSelectedPlaylist(),
+    },
+    {
+      label: 'Delete Playlist',
+      action: () => deleteSelectedPlaylist(),
+      danger: true,
+    },
+  ];
+}
+
 /**
  * Get the maximum valid index for the current view.
  */
@@ -959,25 +1473,20 @@ async function addToWatchLater() {
 
   setStatus(`Adding ${targets.length} video(s) to Watch Later...`, 'loading');
 
-  let added = 0;
-  for (const video of targets) {
-    try {
-      const result = await sendMessage({
-        type: 'ADD_TO_WATCH_LATER',
-        videoId: video.id,
-      });
-      if (result.success) {
-        added++;
-        // Add to local watch later cache
-        if (!watchLaterVideos.find(v => v.id === video.id)) {
-          watchLaterVideos.unshift(video);
-          watchLaterCountEl.textContent = watchLaterVideos.length;
-        }
-      }
-    } catch (e) {
-      errorLog('Add to WL failed:', e);
+  const results = await runWithConcurrency(targets, async (video) => {
+    const result = await sendMessage({
+      type: 'ADD_TO_WATCH_LATER',
+      videoId: video.id,
+    });
+    if (result.success && !watchLaterVideos.find(v => v.id === video.id)) {
+      watchLaterVideos.unshift(video);
     }
-  }
+    return result;
+  });
+  watchLaterCountEl.textContent = watchLaterVideos.length;
+
+  const added = results.filter(r => r?.success).length;
+  const failed = results.filter(r => !r?.success).length;
 
   // Exit visual mode after adding
   visualModeStart = null;
@@ -986,8 +1495,49 @@ async function addToWatchLater() {
   updateMode();
 
   renderVideos();
-  showToast(`Added ${added} video(s) to Watch Later`, added > 0 ? 'success' : 'error');
+  if (failed > 0) {
+    showToast(`Added ${added}/${targets.length} video(s)`, added > 0 ? 'warning' : 'error');
+  } else {
+    showToast(`Added ${added} video(s) to Watch Later`, 'success');
+  }
   setStatus('Ready');
+}
+
+async function addVideoToPlaylist(video, playlistId) {
+  try {
+    return await sendMessage({
+      type: 'ADD_TO_PLAYLIST',
+      videoId: video.id,
+      playlistId,
+    });
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+async function removeVideoFromPlaylist(video, playlistId) {
+  try {
+    return await sendMessage({
+      type: 'REMOVE_FROM_PLAYLIST',
+      videoId: video.id,
+      setVideoId: video.setVideoId,
+      playlistId,
+    });
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+async function removeVideoFromWatchLater(video) {
+  try {
+    return await sendMessage({
+      type: 'REMOVE_FROM_WATCH_LATER',
+      videoId: video.id,
+      setVideoId: video.setVideoId,
+    });
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
 }
 
 /**
@@ -1211,7 +1761,7 @@ function isInWatchLater(videoId) {
 
 // Render video list
 function renderVideos() {
-  const query = searchQuery.toLowerCase();
+  const query = searchQuery.trim();
 
   // Base filter: exclude hidden videos
   let baseFilter = v => !hiddenVideoIds.has(v.id);
@@ -1228,18 +1778,32 @@ function renderVideos() {
     baseFilter = v => origFilter(v) && !isInWatchLater(v.id);
   }
 
-  filteredVideos = query
-    ? videos.filter(v =>
-        baseFilter(v) &&
-        (v.title.toLowerCase().includes(query) ||
-        v.channel.toLowerCase().includes(query))
-      )
-    : videos.filter(baseFilter);
+  const baseVideos = videos.filter(baseFilter);
+
+  if (query) {
+    const scored = [];
+    for (const video of baseVideos) {
+      const score = fuzzyMatchVideo(query, video);
+      if (score > 0) {
+        scored.push({ video, score });
+      }
+    }
+    scored.sort((a, b) => b.score - a.score);
+    filteredVideos = scored.map(item => item.video);
+  } else {
+    filteredVideos = [...baseVideos];
+  }
+
+  if (smartSortEnabled) {
+    filteredVideos.sort((a, b) => scoreVideo(b) - scoreVideo(a));
+  }
 
   videoList.innerHTML = filteredVideos.map((video, index) => {
     const inWL = currentTab === 'subscriptions' && isInWatchLater(video.id);
     const progress = getWatchedProgress(video);
     const fullyWatched = progress >= 100;
+    const annotation = getVideoAnnotation(video.id);
+    const hasAnnotation = annotation.note || (annotation.tags && annotation.tags.length > 0);
     return `
     <div class="video-item ${selectedIndices.has(index) ? 'selected' : ''} ${focusedIndex === index ? 'focused' : ''} ${fullyWatched ? 'fully-watched' : ''}"
          data-index="${index}"
@@ -1255,6 +1819,7 @@ function renderVideos() {
       </div>
       <div class="video-meta">
         ${inWL ? '<span class="wl-check" title="In Watch Later">&#10003;</span>' : ''}
+        ${hasAnnotation ? '<span class="wl-check" title="Annotated">&#128221;</span>' : ''}
         <span class="video-duration">${video.duration || '--:--'}</span>
       </div>
     </div>
@@ -1264,35 +1829,6 @@ function renderVideos() {
   videoCountLabelEl.textContent = 'Videos:';
   videoCountEl.textContent = videos.length;
   selectedCountEl.textContent = selectedIndices.size;
-
-  // Add click handlers
-  videoList.querySelectorAll('.video-item').forEach(el => {
-    el.addEventListener('click', (e) => {
-      const index = parseInt(el.dataset.index);
-      if (e.shiftKey && focusedIndex !== index) {
-        // Range select
-        const start = Math.min(focusedIndex, index);
-        const end = Math.max(focusedIndex, index);
-        for (let i = start; i <= end; i++) {
-          selectedIndices.add(i);
-        }
-      } else if (e.ctrlKey || e.metaKey) {
-        toggleSelection(index);
-      } else {
-        focusedIndex = index;
-      }
-      updateMode();
-      renderVideos();
-    });
-
-    el.addEventListener('dblclick', () => {
-      const video = filteredVideos[parseInt(el.dataset.index)];
-      const url = currentTab === 'watchlater'
-        ? getWatchLaterVideoUrl(video)
-        : `https://www.youtube.com/watch?v=${video.id}`;
-      window.open(url, '_blank');
-    });
-  });
 
   scrollFocusedIntoView();
 }
@@ -1347,12 +1883,6 @@ function renderPlaylists() {
     `;
   }
 
-  playlistList.querySelectorAll('.playlist-item[data-playlist-id]').forEach(el => {
-    el.addEventListener('click', () => {
-      const playlistId = el.dataset.playlistId;
-      moveToPlaylist(playlistId);
-    });
-  });
 }
 
 // Get sorted playlists for modal display
@@ -1400,20 +1930,6 @@ function renderModalPlaylists() {
       Press 1-9 to assign quick move to focused playlist
     </div>
   `;
-
-  modalPlaylists.querySelectorAll('.modal-playlist').forEach(el => {
-    el.addEventListener('click', () => {
-      const playlistId = el.dataset.playlistId;
-      closeModal();
-      if (playlistId === 'WL') {
-        addToWatchLater();
-      } else if (currentTab === 'subscriptions') {
-        addToPlaylist(playlistId);
-      } else {
-        moveToPlaylist(playlistId);
-      }
-    });
-  });
 
   // Scroll focused item into view
   const focused = modalPlaylists.querySelector('.modal-playlist.focused');
@@ -1530,6 +2046,110 @@ function getWatchLaterVideoUrl(video) {
 // Video Preview - opens directly on YouTube since embeds don't work from chrome-extension:// origin
 function showVideoPreview(video) {
   window.open(getWatchLaterVideoUrl(video), '_blank');
+}
+
+async function editFocusedVideoAnnotation() {
+  const video = filteredVideos[focusedIndex];
+  if (!video) return;
+
+  const current = getVideoAnnotation(video.id);
+  const note = await openInputDialog({
+    title: 'Edit Video Note',
+    message: video.title,
+    defaultValue: current.note || '',
+    placeholder: 'Optional note',
+    confirmText: 'Next',
+  });
+  if (note === null) return;
+
+  const tagsRaw = await openInputDialog({
+    title: 'Edit Video Tags',
+    message: 'Comma-separated tags (for search and smart filtering).',
+    defaultValue: (current.tags || []).join(', '),
+    placeholder: 'tutorial, longform, music',
+    confirmText: 'Save',
+  });
+  if (tagsRaw === null) return;
+
+  const tags = tagsRaw
+    .split(',')
+    .map(t => t.trim().toLowerCase())
+    .filter(Boolean)
+    .slice(0, 20);
+
+  videoAnnotations[video.id] = {
+    note: note.trim(),
+    tags,
+    updatedAt: Date.now(),
+  };
+  await saveVideoAnnotations();
+  renderVideos();
+  showToast('Annotation saved', 'success');
+}
+
+function downloadFile(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function exportBackup() {
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    settings: nutubeSettings,
+    quickMoveAssignments,
+    hiddenVideoIds: Array.from(hiddenVideoIds),
+    watchedOverrides,
+    hideWatchLaterInSubs,
+    hideWatched,
+    playlistSortMode,
+    themePref,
+    lastActiveTab: currentTab,
+    videoAnnotations,
+  };
+  downloadFile(
+    `nutube-backup-${new Date().toISOString().slice(0, 10)}.json`,
+    JSON.stringify(payload, null, 2),
+    'application/json'
+  );
+  showToast('Backup exported', 'success');
+}
+
+function importBackup() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json';
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const content = await file.text();
+      const data = JSON.parse(content);
+      await chrome.storage.local.set({
+        nutubeSettings: data.settings || nutubeSettings,
+        quickMoveAssignments: data.quickMoveAssignments || quickMoveAssignments,
+        hiddenVideoIds: data.hiddenVideoIds || Array.from(hiddenVideoIds),
+        watchedOverrides: data.watchedOverrides || watchedOverrides,
+        hideWatchLaterInSubs: data.hideWatchLaterInSubs ?? hideWatchLaterInSubs,
+        hideWatched: data.hideWatched ?? hideWatched,
+        playlistSortMode: data.playlistSortMode || playlistSortMode,
+        themePref: data.themePref || themePref,
+        lastActiveTab: data.lastActiveTab || currentTab,
+        videoAnnotations: data.videoAnnotations || videoAnnotations,
+      });
+      showToast('Backup imported. Reloading view...', 'success');
+      loadAllData();
+    } catch (error) {
+      showToast('Invalid backup file', 'error');
+    }
+  });
+  input.click();
 }
 
 // Channel Preview - fetches videos from the channel's profile
@@ -1753,10 +2373,19 @@ function formatChannelStats(channel, isConfirming) {
 // Render channels list
 // Note: All dynamic content is escaped via escapeHtml() or comes from trusted API sources
 function renderChannels() {
-  const query = searchQuery.toLowerCase();
-  filteredChannels = query
-    ? channels.filter(c => c.name.toLowerCase().includes(query))
-    : [...channels];
+  const query = searchQuery.trim();
+  if (query) {
+    const scored = channels
+      .map(channel => ({
+        channel,
+        score: fuzzyScore(query, `${channel.name} ${channel.subscriberCount || ''} ${channel.lastUploadText || ''}`),
+      }))
+      .filter(item => item.score >= (nutubeSettings.fuzzyThreshold || DEFAULT_SETTINGS.fuzzyThreshold))
+      .sort((a, b) => b.score - a.score);
+    filteredChannels = scored.map(item => item.channel);
+  } else {
+    filteredChannels = [...channels];
+  }
 
   videoList.innerHTML = filteredChannels.map((channel, index) => {
     const isConfirming = pendingUnsubscribe && pendingUnsubscribe.channelId === channel.id;
@@ -1785,20 +2414,6 @@ function renderChannels() {
   videoCountLabelEl.textContent = 'Channels:';
   videoCountEl.textContent = channels.length;
   selectedCountEl.textContent = '0';
-
-  // Add click handlers for channels
-  videoList.querySelectorAll('.channel-item').forEach(el => {
-    el.addEventListener('click', () => {
-      const index = parseInt(el.dataset.index);
-      focusedIndex = index;
-      renderChannels();
-    });
-
-    el.addEventListener('dblclick', () => {
-      const channel = filteredChannels[parseInt(el.dataset.index)];
-      window.open(`https://www.youtube.com/channel/${channel.id}`, '_blank');
-    });
-  });
 
   scrollFocusedIntoView();
 }
@@ -1935,10 +2550,72 @@ function confirmUnsubscribe(channel) {
 }
 
 // Close confirm modal
-function closeConfirm() {
+function closeConfirm(confirmed = false) {
   isConfirmOpen = false;
   confirmModal.classList.remove('visible');
   confirmCallback = null;
+  if (confirmResolver) {
+    confirmResolver(confirmed);
+    confirmResolver = null;
+  }
+}
+
+function openConfirmDialog({ title, message, confirmText = 'Confirm' }) {
+  const titleEl = document.getElementById('confirm-title');
+  const messageEl = document.getElementById('confirm-message');
+  if (titleEl) titleEl.textContent = title;
+  if (messageEl) messageEl.textContent = message;
+  confirmOk.textContent = confirmText;
+
+  isConfirmOpen = true;
+  confirmModal.classList.add('visible');
+
+  return new Promise((resolve) => {
+    confirmResolver = resolve;
+    confirmCallback = () => closeConfirm(true);
+  });
+}
+
+function openInputDialog({ title, message = '', defaultValue = '', placeholder = '', confirmText = 'Save' }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay visible';
+    overlay.innerHTML = `
+      <div class="modal" style="min-width: 380px;">
+        <h2>${escapeHtml(title)}</h2>
+        ${message ? `<p style="color: var(--text-secondary); margin: 10px 0;">${escapeHtml(message)}</p>` : ''}
+        <input id="nutube-input-dialog-value" type="text" style="width:100%;margin:10px 0 14px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:6px;color:var(--text-primary);" value="${escapeHtml(defaultValue)}" placeholder="${escapeHtml(placeholder)}">
+        <div class="confirm-buttons">
+          <button class="btn-cancel" id="nutube-input-dialog-cancel">Cancel</button>
+          <button class="btn-confirm" id="nutube-input-dialog-confirm">${escapeHtml(confirmText)}</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const input = overlay.querySelector('#nutube-input-dialog-value');
+    const cancel = overlay.querySelector('#nutube-input-dialog-cancel');
+    const confirm = overlay.querySelector('#nutube-input-dialog-confirm');
+
+    const cleanup = () => overlay.remove();
+    const onCancel = () => { cleanup(); resolve(null); };
+    const onConfirm = () => { const value = input.value; cleanup(); resolve(value); };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onCancel();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        onConfirm();
+      }
+    };
+
+    cancel.addEventListener('click', onCancel);
+    confirm.addEventListener('click', onConfirm);
+    overlay.addEventListener('keydown', onKey);
+    input.focus();
+    input.select();
+  });
 }
 
 // Render suggestions list
@@ -1954,13 +2631,6 @@ function renderSuggestions() {
       </div>
     </div>
   `).join('');
-
-  suggestionsList.querySelectorAll('.suggestion-item').forEach(el => {
-    el.addEventListener('click', () => {
-      const channel = channelSuggestions[parseInt(el.dataset.index)];
-      window.open(`https://www.youtube.com/channel/${channel.id}`, '_blank');
-    });
-  });
 
   // Scroll focused into view
   const focused = suggestionsList.querySelector('.focused');
@@ -2016,6 +2686,28 @@ function getTargetVideos() {
     return Array.from(selectedIndices).map(i => filteredVideos[i]).filter(Boolean);
   }
   return filteredVideos[focusedIndex] ? [filteredVideos[focusedIndex]] : [];
+}
+
+async function syncCurrentListFromYouTube() {
+  if (currentTab === 'watchlater') {
+    const response = await sendMessage({ type: 'GET_WATCH_LATER' });
+    if (response.success) {
+      watchLaterVideos = response.data || [];
+      videos = watchLaterVideos;
+      watchLaterCountEl.textContent = watchLaterVideos.length;
+      renderVideos();
+    }
+    return;
+  }
+
+  if (currentTab === 'playlists' && playlistBrowserLevel === 'videos' && activePlaylistId) {
+    const response = await sendMessage({ type: 'GET_PLAYLIST_VIDEOS', playlistId: activePlaylistId });
+    if (response.success) {
+      playlistVideos = response.data || [];
+      videos = playlistVideos;
+      renderVideos();
+    }
+  }
 }
 
 // Save state for undo
@@ -2105,7 +2797,8 @@ async function undo() {
         focusedIndex = lastAction.originalFocusedIndex;
         selectedIndices = lastAction.originalSelectedIndices;
         renderVideos();
-        showToast('Position restored (refresh to sync with YouTube)', 'success');
+        await syncCurrentListFromYouTube();
+        showToast('Position restored and synced with YouTube', 'success');
         break;
       }
       case 'delete_from_playlist': {
@@ -2171,20 +2864,10 @@ async function deleteVideos() {
   setStatus(`Deleting ${targets.length} video(s)...`);
 
   // Process API calls in background
-  Promise.all(
-    targets.map(video =>
-      sendMessage({
-        type: 'REMOVE_FROM_WATCH_LATER',
-        videoId: video.id,
-        setVideoId: video.setVideoId,
-      }).catch(e => {
-        errorLog('Delete exception:', e);
-        return { success: false, error: String(e) };
-      })
-    )
-  ).then(results => {
+  (async () => {
+    const results = await runWithConcurrency(targets, async video => removeVideoFromWatchLater(video));
     const errors = results
-      .filter(r => !r.success && r.error)
+      .filter(r => r && !r.success && r.error)
       .map(r => r.error);
     // Note: YouTube often returns 409 errors but still processes requests successfully
     if (errors.length > 0 && !errors.every(e => e.includes('409'))) {
@@ -2194,7 +2877,7 @@ async function deleteVideos() {
       showToast(`Deleted ${targets.length} video(s)`, 'success');
     }
     setStatus('Ready');
-  });
+  })();
 }
 
 /**
@@ -2231,21 +2914,13 @@ async function deleteFromPlaylist() {
   setStatus(`Removing ${targets.length} video(s)...`, 'loading');
 
   // Process API calls in background
-  Promise.all(
-    targets.map(video =>
-      sendMessage({
-        type: 'REMOVE_FROM_PLAYLIST',
-        videoId: video.id,
-        setVideoId: video.setVideoId,
-        playlistId: activePlaylistId,
-      }).catch(e => {
-        errorLog('Remove from playlist error:', e);
-        return { success: false, error: String(e) };
-      })
-    )
-  ).then(results => {
+  (async () => {
+    const results = await runWithConcurrency(
+      targets,
+      async video => removeVideoFromPlaylist(video, activePlaylistId)
+    );
     const errors = results
-      .filter(r => !r.success && r.error)
+      .filter(r => r && !r.success && r.error)
       .map(r => r.error);
     if (errors.length > 0 && !errors.every(e => e.includes('409'))) {
       warnLog('Remove from playlist had errors:', errors);
@@ -2254,11 +2929,16 @@ async function deleteFromPlaylist() {
       showToast(`Removed ${targets.length} video(s) from playlist`, 'success');
     }
     setStatus('Ready');
-  });
+  })();
 }
 
 async function createNewPlaylist() {
-  const title = prompt('New playlist name:');
+  const title = await openInputDialog({
+    title: 'Create Playlist',
+    message: 'Enter a name for the new playlist.',
+    placeholder: 'Playlist name',
+    confirmText: 'Create',
+  });
   if (!title || !title.trim()) return;
 
   const trimmedTitle = title.trim();
@@ -2299,7 +2979,11 @@ async function deleteSelectedPlaylist() {
   const playlist = filteredPlaylists[focusedIndex];
   if (!playlist) return;
 
-  const confirmed = confirm(`Delete playlist "${playlist.title}"? This cannot be undone.`);
+  const confirmed = await openConfirmDialog({
+    title: 'Delete Playlist',
+    message: `Delete "${playlist.title}"? This action cannot be undone.`,
+    confirmText: 'Delete',
+  });
   if (!confirmed) return;
 
   setStatus('Deleting playlist...', 'loading');
@@ -2331,7 +3015,12 @@ async function renameSelectedPlaylist() {
   const playlist = filteredPlaylists[focusedIndex];
   if (!playlist) return;
 
-  const newTitle = prompt('Rename playlist:', playlist.title);
+  const newTitle = await openInputDialog({
+    title: 'Rename Playlist',
+    message: `Current name: ${playlist.title}`,
+    defaultValue: playlist.title,
+    confirmText: 'Rename',
+  });
   if (!newTitle || !newTitle.trim() || newTitle.trim() === playlist.title) return;
 
   const trimmedTitle = newTitle.trim();
@@ -2722,24 +3411,9 @@ function openPurgeDialog() {
 async function executePurge(watchedVideos) {
   setStatus(`Removing ${watchedVideos.length} watched videos...`, 'loading');
 
-  const removedVideos = [];
-  let removed = 0;
-
-  for (const video of watchedVideos) {
-    try {
-      const result = await sendMessage({
-        type: 'REMOVE_FROM_WATCH_LATER',
-        videoId: video.id,
-        setVideoId: video.setVideoId,
-      });
-      if (result.success) {
-        removed++;
-        removedVideos.push(video);
-      }
-    } catch (err) {
-      errorLog('Failed to remove video:', video.id, err);
-    }
-  }
+  const results = await runWithConcurrency(watchedVideos, async video => removeVideoFromWatchLater(video));
+  const removedVideos = watchedVideos.filter((_, index) => results[index]?.success);
+  const removed = removedVideos.length;
 
   // Remove from local state
   const removedIds = new Set(removedVideos.map(v => v.id));
@@ -2795,18 +3469,16 @@ async function moveToTop() {
   // Process API calls in background - move in reverse order to maintain relative order
   const firstNonTargetVideo = videos.find(v => !targetIds.has(v.id));
 
-  Promise.all(
-    [...targets].reverse().map(video =>
-      sendMessage({
+  (async () => {
+    const results = await runWithConcurrency(
+      [...targets].reverse(),
+      async video => sendMessage({
         type: 'MOVE_TO_TOP',
         setVideoId: video.setVideoId,
         firstSetVideoId: firstNonTargetVideo?.setVideoId,
-      }).catch(e => {
-        errorLog('Move to top error:', e);
-        return { success: false, error: String(e) };
-      })
-    )
-  ).then(results => {
+      }),
+      { concurrency: 1 }
+    );
     const errors = results.filter(r => r && !r.success && r.error);
     if (errors.length > 0) {
       showToast(`Move to top had ${errors.length} error(s)`, 'warning');
@@ -2814,7 +3486,7 @@ async function moveToTop() {
       showToast('Moved to top', 'success');
     }
     setStatus('Ready');
-  });
+  })();
 }
 
 async function moveWatchLaterVideoUp() {
@@ -2858,23 +3530,21 @@ async function moveWatchLaterVideoUp() {
   // API call in background
   showToast(`Moving ${targets.length} video(s) up...`);
 
-  Promise.all(
-    [...targets].reverse().map(video =>
-      sendMessage({
+  (async () => {
+    const results = await runWithConcurrency(
+      [...targets].reverse(),
+      async video => sendMessage({
         type: 'MOVE_TO_TOP',
         setVideoId: video.setVideoId,
         firstSetVideoId: targetSuccessor.setVideoId,
-      }).catch(e => {
-        errorLog('Move up error:', e);
-        return { success: false, error: String(e) };
-      })
-    )
-  ).then(results => {
+      }),
+      { concurrency: 1 }
+    );
     const errors = results.filter(r => r && !r.success && r.error);
     if (errors.length > 0) {
       showToast(`Some moves failed`, 'error');
     }
-  });
+  })();
 }
 
 async function moveWatchLaterVideoDown() {
@@ -2920,23 +3590,21 @@ async function moveWatchLaterVideoDown() {
   // API call in background
   showToast(`Moving ${targets.length} video(s) down...`);
 
-  Promise.all(
-    [...targets].reverse().map(video =>
-      sendMessage({
+  (async () => {
+    const results = await runWithConcurrency(
+      [...targets].reverse(),
+      async video => sendMessage({
         type: 'MOVE_TO_TOP',
         setVideoId: video.setVideoId,
         firstSetVideoId: targetSuccessor.setVideoId,
-      }).catch(e => {
-        errorLog('Move down error:', e);
-        return { success: false, error: String(e) };
-      })
-    )
-  ).then(results => {
+      }),
+      { concurrency: 1 }
+    );
     const errors = results.filter(r => r && !r.success && r.error);
     if (errors.length > 0) {
       showToast(`Some moves failed`, 'error');
     }
-  });
+  })();
 }
 
 async function moveToBottom() {
@@ -2975,18 +3643,16 @@ async function moveToBottom() {
   // Process API calls in background
   const lastNonTargetVideo = videos.filter(v => !targetIds.has(v.id)).pop();
 
-  Promise.all(
-    targets.map(video =>
-      sendMessage({
+  (async () => {
+    const results = await runWithConcurrency(
+      targets,
+      async video => sendMessage({
         type: 'MOVE_TO_BOTTOM',
         setVideoId: video.setVideoId,
         lastSetVideoId: lastNonTargetVideo?.setVideoId,
-      }).catch(e => {
-        errorLog('Move to bottom error:', e);
-        return { success: false, error: String(e) };
-      })
-    )
-  ).then(results => {
+      }),
+      { concurrency: 1 }
+    );
     const errors = results.filter(r => r && !r.success && r.error);
     if (errors.length > 0) {
       showToast(`Move to bottom had ${errors.length} error(s)`, 'warning');
@@ -2994,7 +3660,7 @@ async function moveToBottom() {
       showToast('Moved to bottom', 'success');
     }
     setStatus('Ready');
-  });
+  })();
 }
 
 async function moveToPlaylist(playlistId) {
@@ -3023,19 +3689,15 @@ async function moveToPlaylist(playlistId) {
   setStatus(`Moving ${targets.length} video(s) to ${playlist?.title}...`);
 
   // Process API calls in background
-  Promise.all(
-    targets.map(video =>
+  (async () => {
+    const results = await runWithConcurrency(targets, async (video) => (
       sendMessage({
         type: 'MOVE_TO_PLAYLIST',
         videoId: video.id,
         setVideoId: video.setVideoId,
         playlistId,
-      }).catch(e => {
-        errorLog('Move failed:', e);
-        return { success: false, error: String(e) };
       })
-    )
-  ).then(results => {
+    ));
     const errors = results.filter(r => r && !r.success && r.error);
     if (errors.length > 0) {
       showToast(`Move had ${errors.length} error(s)`, 'warning');
@@ -3043,7 +3705,7 @@ async function moveToPlaylist(playlistId) {
       showToast(`Moved ${targets.length} to ${playlist?.title}`, 'success');
     }
     setStatus('Ready');
-  });
+  })();
 }
 
 // Add to playlist (for subscriptions - doesn't remove from current view)
@@ -3054,21 +3716,8 @@ async function addToPlaylist(playlistId) {
   const playlist = getPlaylistById(playlistId);
   setStatus(`Adding ${targets.length} video(s) to ${playlist?.title}...`);
 
-  let added = 0;
-  for (const video of targets) {
-    try {
-      const result = await sendMessage({
-        type: 'ADD_TO_PLAYLIST',
-        videoId: video.id,
-        playlistId,
-      });
-      if (result.success) {
-        added++;
-      }
-    } catch (e) {
-      errorLog('Add to playlist failed:', e);
-    }
-  }
+  const results = await runWithConcurrency(targets, async (video) => addVideoToPlaylist(video, playlistId));
+  const added = results.filter(r => r?.success).length;
 
   // Exit visual mode after adding
   visualModeStart = null;
@@ -3277,6 +3926,15 @@ function updateVisualSelection() {
 
 // Keyboard handling
 document.addEventListener('keydown', (e) => {
+  if (contextMenuEl?.classList.contains('visible')) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      hideContextMenu();
+      forceDashboardFocus();
+    }
+    return;
+  }
+
   // Search input handling
   if (document.activeElement === searchInput) {
     if (e.key === 'Escape') {
@@ -3343,9 +4001,9 @@ document.addEventListener('keydown', (e) => {
   if (isConfirmOpen) {
     e.preventDefault();
     if (e.key === 'Escape' || e.key === 'n') {
-      closeConfirm();
+      closeConfirm(false);
     } else if (e.key === 'Enter' || e.key === 'y') {
-      closeConfirm();
+      closeConfirm(true);
       if (confirmCallback) confirmCallback();
     }
     return;
@@ -3446,6 +4104,10 @@ document.addEventListener('keydown', (e) => {
   if (pendingG && e.key !== 'g') {
     pendingG = false;
   }
+
+  const deleteActionKey = mappedKey('delete', 'x');
+  const moveActionKey = mappedKey('move', 'm');
+  const refreshActionKey = mappedKey('refresh', 'r');
 
   // Main shortcuts
   if (e.key === '?') {
@@ -3649,7 +4311,7 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'T') {
     e.preventDefault();
     cycleTheme();
-  } else if (e.key === 'x' || e.key === 'd' || e.key === 'Delete' || e.key === 'Backspace') {
+  } else if (e.key === deleteActionKey || e.key === 'x' || e.key === 'd' || e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
     if (currentTab === 'watchlater') {
       deleteVideos();
@@ -3676,7 +4338,7 @@ document.addEventListener('keydown', (e) => {
     } else if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
       movePlaylistVideoToBottom();
     }
-  } else if (e.key === 'm') {
+  } else if (e.key === moveActionKey || e.key === 'm') {
     if (currentTab === 'watchlater' || currentTab === 'subscriptions') {
       openModal();
     } else if (currentTab === 'playlists' && playlistBrowserLevel === 'videos') {
@@ -3740,8 +4402,18 @@ document.addEventListener('keydown', (e) => {
         window.open(url, '_blank');
       }
     }
-  } else if (e.key === 'r') {
+  } else if (e.key === refreshActionKey || e.key === 'r') {
     loadData();
+  } else if (e.key === 'I') {
+    toggleSmartSort();
+  } else if (e.key === 'e') {
+    if (currentTab !== 'channels' && !(currentTab === 'playlists' && playlistBrowserLevel === 'list')) {
+      editFocusedVideoAnnotation();
+    }
+  } else if (e.key === 'B') {
+    exportBackup();
+  } else if (e.key === 'L') {
+    importBackup();
   } else if (e.key === 'p') {
     // Preview channel (channels tab only)
     if (currentTab === 'channels') {
@@ -3975,16 +4647,72 @@ function showLoadError(message) {
 async function loadAllData() {
   loadingEl.style.display = 'flex';
   videoList.innerHTML = '';
-  loadingText.textContent = 'Loading...';
-  setStatus('Loading...', 'loading');
+  loadingText.textContent = 'Loading current view...';
+  setStatus('Loading current view...', 'loading');
+
+  const prefetch = async () => {
+    const tasks = [];
+
+    if (currentTab !== 'watchlater') {
+      tasks.push((async () => {
+        const result = await sendMessage({ type: 'GET_WATCH_LATER' });
+        if (result.success) {
+          watchLaterVideos = result.data || [];
+          watchLaterCountEl.textContent = watchLaterVideos.length;
+        }
+      })());
+    }
+
+    if (currentTab !== 'subscriptions') {
+      tasks.push((async () => {
+        const result = await sendMessage({ type: 'GET_SUBSCRIPTIONS' });
+        if (result.success) {
+          subscriptionVideos = result.data || [];
+          subscriptionsCountEl.textContent = subscriptionVideos.length;
+        }
+      })());
+    }
+
+    if (currentTab !== 'channels') {
+      tasks.push((async () => {
+        const result = await sendMessage({ type: 'GET_CHANNELS' });
+        if (result.success) {
+          channels = result.data || [];
+          rebuildChannelMap();
+          channelsCountEl.textContent = channels.length;
+        }
+      })());
+    }
+
+    if (currentTab !== 'playlists') {
+      tasks.push((async () => {
+        const result = await sendMessage({ type: 'GET_PLAYLISTS' });
+        if (result.success) {
+          playlists = result.data || [];
+          rebuildPlaylistMap();
+          playlistsCountEl.textContent = playlists.length;
+          renderPlaylists();
+        }
+      })());
+    }
+
+    await Promise.allSettled(tasks);
+
+    if (subscriptionVideos.length > 0 && channels.length > 0) {
+      const activityMap = deriveChannelActivity(subscriptionVideos);
+      applyChannelActivity(channels, activityMap);
+    }
+
+    if (watchLaterVideos.length > 0 || subscriptionVideos.length > 0) {
+      const allLoadedIds = new Set([...watchLaterVideos, ...subscriptionVideos].map(v => v.id));
+      await pruneStaleOverrides(allLoadedIds);
+    }
+  };
 
   try {
-    // Load quick move assignments and all data in parallel
-    const [wlResult, subsResult, playlistsResult, channelsResult] = await Promise.all([
-      sendMessage({ type: 'GET_WATCH_LATER' }),
-      sendMessage({ type: 'GET_SUBSCRIPTIONS' }),
-      sendMessage({ type: 'GET_PLAYLISTS' }),
-      sendMessage({ type: 'GET_CHANNELS' }),
+    await loadNuTubeSettings();
+    await Promise.all([
+      loadLastTabPref(),
       loadQuickMoveAssignments(),
       loadHiddenVideos(),
       loadHideWatchLaterPref(),
@@ -3992,67 +4720,26 @@ async function loadAllData() {
       loadHideWatchedPref(),
       loadPlaylistSortPref(),
       loadThemePref(),
+      loadSmartSortPref(),
+      loadVideoAnnotations(),
     ]);
 
-    if (wlResult.success) {
-      watchLaterVideos = wlResult.data;
-      watchLaterCountEl.textContent = watchLaterVideos.length;
-    }
-
-    if (subsResult.success) {
-      subscriptionVideos = subsResult.data;
-      subscriptionsContinuationExhausted = false;
-      setLoadMoreState('hidden');
-      subscriptionsCountEl.textContent = subscriptionVideos.length;
-    }
-
-    if (playlistsResult.success) {
-      playlists = playlistsResult.data;
-      rebuildPlaylistMap();
-      playlistsCountEl.textContent = playlists.length;
-      renderPlaylists();
-    }
-
-    if (channelsResult.success) {
-      channels = channelsResult.data;
-      rebuildChannelMap();
-      channelsCountEl.textContent = channels.length;
-    }
-
-    // Derive channel activity from subscription videos
-    if (subsResult.success && channelsResult.success) {
-      const activityMap = deriveChannelActivity(subscriptionVideos);
-      applyChannelActivity(channels, activityMap);
-    }
-
-    updateHideWatchedIndicator();
+    updateTabStateUI(currentTab, 'auto');
+    renderShortcuts();
     applyTheme();
+    updateHideWatchedIndicator();
 
-    // Set current tab's data
-    if (currentTab === 'channels') {
-      renderChannels();
-    } else if (currentTab === 'playlists') {
-      renderPlaylistBrowser();
-    } else {
-      videos = currentTab === 'watchlater' ? watchLaterVideos : subscriptionVideos;
-      renderVideos();
-    }
-
-    // Prune stale watched overrides only if both data sources loaded
-    if (watchLaterVideos.length > 0 || subscriptionVideos.length > 0) {
-      const allLoadedIds = new Set([...watchLaterVideos, ...subscriptionVideos].map(v => v.id));
-      await pruneStaleOverrides(allLoadedIds);
-    }
-
-    setStatus('Ready');
-    showToast(`Loaded ${watchLaterVideos.length} WL, ${subscriptionVideos.length} Subs, ${channels.length} Channels`, 'success');
+    await loadData();
+    prefetch().catch(e => warnLog('Background prefetch failed:', e));
   } catch (error) {
     errorLog('Load error:', error);
     setStatus(error.message, 'error');
     showLoadError(error.message);
-  } finally {
     loadingEl.style.display = 'none';
+    return;
   }
+
+  loadingEl.style.display = 'none';
 }
 
 // Tab click handlers
@@ -4060,6 +4747,26 @@ tabWatchLater.addEventListener('click', () => switchTab('watchlater'));
 tabSubscriptions.addEventListener('click', () => switchTab('subscriptions'));
 tabChannels.addEventListener('click', () => switchTab('channels'));
 tabPlaylists.addEventListener('click', () => switchTab('playlists'));
+
+tabStrip?.addEventListener('scroll', updateTabOverflowIndicators);
+tabShiftBefore?.addEventListener('click', () => {
+  if (!tabStrip) return;
+  tabStrip.scrollBy({
+    left: -Math.max(120, Math.floor(tabStrip.clientWidth * 0.75)),
+    behavior: 'smooth',
+  });
+});
+tabShiftAfter?.addEventListener('click', () => {
+  if (!tabStrip) return;
+  tabStrip.scrollBy({
+    left: Math.max(120, Math.floor(tabStrip.clientWidth * 0.75)),
+    behavior: 'smooth',
+  });
+});
+window.addEventListener('resize', () => {
+  updateTabRolodexClasses();
+  updateTabOverflowIndicators();
+});
 
 // Breadcrumb click to return to playlist list
 breadcrumbEl?.querySelector('.breadcrumb-root')?.addEventListener('click', () => {
@@ -4069,15 +4776,202 @@ breadcrumbEl?.querySelector('.breadcrumb-root')?.addEventListener('click', () =>
 });
 
 // Confirm modal button handlers
-confirmCancel.addEventListener('click', () => closeConfirm());
+confirmCancel.addEventListener('click', () => closeConfirm(false));
 confirmOk.addEventListener('click', () => {
-  closeConfirm();
+  closeConfirm(true);
   if (confirmCallback) confirmCallback();
 });
+
+// Delegated list interactions (avoids re-binding per render for large lists)
+videoList.addEventListener('click', (e) => {
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+
+  const playlistItem = target.closest('.playlist-browser-item');
+  if (playlistItem) {
+    const index = parseInt(playlistItem.getAttribute('data-index') || '0', 10);
+    focusedIndex = index;
+    drillIntoPlaylist(filteredPlaylists[index]);
+    return;
+  }
+
+  const channelItem = target.closest('.channel-item');
+  if (channelItem) {
+    const index = parseInt(channelItem.getAttribute('data-index') || '0', 10);
+    focusedIndex = index;
+    renderChannels();
+    return;
+  }
+
+  const videoItem = target.closest('.video-item');
+  if (videoItem) {
+    const index = parseInt(videoItem.getAttribute('data-index') || '0', 10);
+    if (e.shiftKey && focusedIndex !== index) {
+      const start = Math.min(focusedIndex, index);
+      const end = Math.max(focusedIndex, index);
+      for (let i = start; i <= end; i++) {
+        selectedIndices.add(i);
+      }
+    } else if (e.ctrlKey || e.metaKey) {
+      toggleSelection(index);
+    } else {
+      focusedIndex = index;
+    }
+    updateMode();
+    renderVideos();
+  }
+});
+
+videoList.addEventListener('dblclick', (e) => {
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+
+  const channelItem = target.closest('.channel-item');
+  if (channelItem) {
+    const index = parseInt(channelItem.getAttribute('data-index') || '0', 10);
+    const channel = filteredChannels[index];
+    if (channel) {
+      window.open(`https://www.youtube.com/channel/${channel.id}`, '_blank');
+    }
+    return;
+  }
+
+  const videoItem = target.closest('.video-item');
+  if (videoItem) {
+    const index = parseInt(videoItem.getAttribute('data-index') || '0', 10);
+    const video = filteredVideos[index];
+    if (video) {
+      const url = currentTab === 'watchlater'
+        ? getWatchLaterVideoUrl(video)
+        : `https://www.youtube.com/watch?v=${video.id}`;
+      window.open(url, '_blank');
+    }
+  }
+});
+
+videoList.addEventListener('contextmenu', (e) => {
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+  if (isModalOpen || isHelpOpen || isConfirmOpen || isSuggestionsOpen || isChannelPreviewOpen) {
+    return;
+  }
+
+  const playlistItem = target.closest('.playlist-browser-item');
+  if (playlistItem && currentTab === 'playlists' && playlistBrowserLevel === 'list') {
+    const index = parseInt(playlistItem.getAttribute('data-index') || '-1', 10);
+    const playlist = filteredPlaylists[index];
+    if (!playlist) return;
+
+    e.preventDefault();
+    setSingleFocusedSelection(index);
+    renderPlaylistBrowser();
+    showContextMenu(e.clientX, e.clientY, buildPlaylistContextMenuItems(playlist));
+    return;
+  }
+
+  const channelItem = target.closest('.channel-item');
+  if (channelItem && currentTab === 'channels') {
+    const index = parseInt(channelItem.getAttribute('data-index') || '-1', 10);
+    const channel = filteredChannels[index];
+    if (!channel) return;
+
+    e.preventDefault();
+    setSingleFocusedSelection(index);
+    renderChannels();
+    showContextMenu(e.clientX, e.clientY, buildChannelContextMenuItems(channel));
+    return;
+  }
+
+  const videoItem = target.closest('.video-item');
+  if (videoItem) {
+    const index = parseInt(videoItem.getAttribute('data-index') || '-1', 10);
+    const video = filteredVideos[index];
+    if (!video) return;
+
+    e.preventDefault();
+    setSingleFocusedSelection(index);
+    renderVideos();
+    showContextMenu(e.clientX, e.clientY, buildVideoContextMenuItems(video));
+    return;
+  }
+
+  hideContextMenu();
+});
+
+playlistList.addEventListener('click', (e) => {
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+  const playlistItem = target.closest('.playlist-item[data-playlist-id]');
+  if (!playlistItem) return;
+  const playlistId = playlistItem.getAttribute('data-playlist-id');
+  if (playlistId) {
+    moveToPlaylist(playlistId);
+  }
+});
+
+modalPlaylists.addEventListener('click', (e) => {
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+  const item = target.closest('.modal-playlist');
+  if (!item) return;
+
+  const playlistId = item.getAttribute('data-playlist-id');
+  if (!playlistId) return;
+
+  closeModal();
+  if (playlistId === 'WL') {
+    addToWatchLater();
+  } else if (currentTab === 'subscriptions') {
+    addToPlaylist(playlistId);
+  } else {
+    moveToPlaylist(playlistId);
+  }
+});
+
+suggestionsList.addEventListener('click', (e) => {
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+  const item = target.closest('.suggestion-item');
+  if (!item) return;
+  const index = parseInt(item.getAttribute('data-index') || '0', 10);
+  const channel = channelSuggestions[index];
+  if (channel) {
+    window.open(`https://www.youtube.com/channel/${channel.id}`, '_blank');
+  }
+});
+
+contextMenuItemsEl?.addEventListener('click', (e) => {
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+  const actionButton = target.closest('.context-menu-item');
+  if (!actionButton || actionButton.hasAttribute('disabled')) return;
+
+  e.preventDefault();
+  const actionIndex = parseInt(actionButton.getAttribute('data-action-index') || '-1', 10);
+  if (actionIndex < 0) return;
+  runContextMenuAction(actionIndex);
+});
+
+document.addEventListener('click', (e) => {
+  if (!contextMenuEl?.classList.contains('visible')) return;
+  if (e.target instanceof Node && contextMenuEl.contains(e.target)) return;
+  hideContextMenu();
+});
+
+document.addEventListener('contextmenu', (e) => {
+  if (!contextMenuEl?.classList.contains('visible')) return;
+  if (e.defaultPrevented) return;
+  if (e.target instanceof Node && contextMenuEl.contains(e.target)) return;
+  hideContextMenu();
+});
+
+window.addEventListener('resize', hideContextMenu);
 
 // Infinite scroll for subscriptions and channels
 const videoListContainerEl = document.getElementById('video-list-container');
 let scrollDebounceTimer = null;
+
+videoListContainerEl.addEventListener('scroll', hideContextMenu, { passive: true });
 
 videoListContainerEl.addEventListener('scroll', () => {
   const { scrollTop, scrollHeight, clientHeight } = videoListContainerEl;
@@ -4111,10 +5005,9 @@ document.getElementById('channel-preview-modal').addEventListener('click', (e) =
 // Ensure keyboard bindings work when returning to the dashboard
 // After opening a video in a new tab and returning, focus can be lost
 function restoreFocus() {
-  const searchInput = document.getElementById('search-input');
   // Only restore focus if search isn't active
   if (document.activeElement !== searchInput) {
-    document.body.focus();
+    forceDashboardFocus();
   }
 }
 
@@ -4122,7 +5015,12 @@ window.addEventListener('focus', restoreFocus);
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
     // Small delay to let the browser settle
-    setTimeout(restoreFocus, 50);
+    setTimeout(() => {
+      restoreFocus();
+      if (isSidePanelSurface) {
+        requestDashboardFocus();
+      }
+    }, 50);
   }
 });
 
@@ -4148,3 +5046,7 @@ chrome.storage.local.get(['themePref'], (result) => {
 // Initialize
 renderShortcuts();
 loadAllData();
+
+if (isSidePanelSurface) {
+  requestDashboardFocus();
+}
