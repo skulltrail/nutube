@@ -200,6 +200,25 @@ function buildContext(): InnerTubeContext {
   };
 }
 
+// YouTube playlist mutations are stateful and can conflict when fired in parallel.
+// Queue writes per playlist so rapid deletes/reorders don't stomp on each other.
+const playlistMutationQueues = new Map<string, Promise<void>>();
+
+async function enqueuePlaylistMutation<T>(playlistId: string, task: () => Promise<T>): Promise<T> {
+  const previous = playlistMutationQueues.get(playlistId) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(task);
+  const settled = next.then(() => undefined, () => undefined);
+  playlistMutationQueues.set(playlistId, settled);
+
+  try {
+    return await next;
+  } finally {
+    if (playlistMutationQueues.get(playlistId) === settled) {
+      playlistMutationQueues.delete(playlistId);
+    }
+  }
+}
+
 // Make authenticated InnerTube API request
 async function innertubeRequest(endpoint: string, body: object): Promise<any> {
   const sapisid = getSapisidCookie();
@@ -355,6 +374,27 @@ function extractPlaylistVideoCount(lockup: any): number {
   }
 
   return 0;
+}
+
+function extractPlaylistThumbnail(lockup: any): string {
+  if (!lockup || typeof lockup !== 'object') return '';
+
+  const imageCandidates = [
+    lockup.contentImage?.collectionThumbnailViewModel?.primaryThumbnail?.thumbnailViewModel?.image?.sources,
+    lockup.contentImage?.collectionThumbnailViewModel?.stackedThumbnails?.[0]?.thumbnailViewModel?.image?.sources,
+    lockup.contentImage?.thumbnailViewModel?.image?.sources,
+    lockup.collectionThumbnailViewModel?.primaryThumbnail?.thumbnailViewModel?.image?.sources,
+    lockup.collectionThumbnailViewModel?.stackedThumbnails?.[0]?.thumbnailViewModel?.image?.sources,
+  ];
+
+  for (const sources of imageCandidates) {
+    const url = sources?.[0]?.url;
+    if (url) {
+      return url;
+    }
+  }
+
+  return '';
 }
 
 // Recursively search object for video count text
@@ -584,6 +624,7 @@ function findPlaylistsInObject(obj: any, playlists: Playlist[], visited = new We
           id: contentId,
           title: title,
           videoCount,
+          thumbnail: extractPlaylistThumbnail(lockup),
         });
       }
     }
@@ -654,27 +695,35 @@ async function getUserPlaylists(): Promise<Playlist[]> {
     console.warn('Could not fetch guide playlists:', e);
   }
 
-  // For playlists with videoCount = 0, try fetching individual playlist details
-  // to get accurate video counts
-  const playlistsWithMissingCounts = playlists.filter(p => p.videoCount === 0);
-  if (playlistsWithMissingCounts.length > 0) {
-    debugLog('Fetching individual playlist details for', playlistsWithMissingCounts.length, 'playlists');
+  // Fill in missing metadata from the individual playlist page when needed.
+  const playlistsNeedingDetails = playlists.filter(p => p.videoCount === 0 || !p.thumbnail);
+  if (playlistsNeedingDetails.length > 0) {
+    debugLog('Fetching individual playlist details for', playlistsNeedingDetails.length, 'playlists');
 
     // Fetch in batches to avoid overwhelming the API
     const batchSize = 3;
-    for (let i = 0; i < playlistsWithMissingCounts.length; i += batchSize) {
-      const batch = playlistsWithMissingCounts.slice(i, i + batchSize);
+    for (let i = 0; i < playlistsNeedingDetails.length; i += batchSize) {
+      const batch = playlistsNeedingDetails.slice(i, i + batchSize);
       await Promise.all(batch.map(async (playlist) => {
         try {
           const playlistData = await innertubeRequest('browse', {
             browseId: `VL${playlist.id}`,
           });
 
-          // Extract video count from playlist detail response
-          const videoCount = extractVideoCountFromPlaylistDetails(playlistData);
-          if (videoCount > 0) {
-            playlist.videoCount = videoCount;
-            debugLog('Got video count for', playlist.title, ':', videoCount);
+          if (playlist.videoCount === 0) {
+            const videoCount = extractVideoCountFromPlaylistDetails(playlistData);
+            if (videoCount > 0) {
+              playlist.videoCount = videoCount;
+              debugLog('Got video count for', playlist.title, ':', videoCount);
+            }
+          }
+
+          if (!playlist.thumbnail) {
+            const thumbnail = extractThumbnailFromPlaylistDetails(playlistData);
+            if (thumbnail) {
+              playlist.thumbnail = thumbnail;
+              debugLog('Got thumbnail for', playlist.title);
+            }
           }
         } catch (e) {
           debugLog('Failed to fetch playlist details for', playlist.id, e);
@@ -742,26 +791,60 @@ function extractVideoCountFromPlaylistDetails(data: any): number {
   return findVideoCountInObject(data);
 }
 
+function extractThumbnailFromPlaylistDetails(data: any): string {
+  const headerThumbs = data?.header?.playlistHeaderRenderer?.playlistHeaderBanner?.heroPlaylistThumbnailRenderer?.thumbnail?.thumbnails;
+  if (headerThumbs?.[0]?.url) {
+    return headerThumbs[0].url;
+  }
+
+  const listContents =
+    data?.contents?.twoColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents?.[0]?.playlistVideoListRenderer?.contents ||
+    [];
+
+  for (const item of listContents) {
+    const thumb = item?.playlistVideoRenderer?.thumbnail?.thumbnails?.[0]?.url;
+    if (thumb) {
+      return thumb;
+    }
+  }
+
+  return '';
+}
+
 // Remove video from a specific playlist
 async function removeFromPlaylist(videoId: string, setVideoId: string, playlistId: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    await innertubeRequest('browse/edit_playlist', {
-      playlistId,
-      actions: [{
-        setVideoId,
-        action: 'ACTION_REMOVE_VIDEO',
-      }],
-    });
-    return { success: true };
-  } catch (e: any) {
-    // YouTube often returns 409 (Conflict) but still processes the request successfully
-    // Treat 409 as success since the action typically completes
-    if (e.message?.includes('409')) {
+  return enqueuePlaylistMutation(playlistId, async () => {
+    try {
+      await innertubeRequest('browse/edit_playlist', {
+        playlistId,
+        actions: [{
+          setVideoId,
+          action: 'ACTION_REMOVE_VIDEO',
+        }],
+      });
       return { success: true };
+    } catch (e: any) {
+      // YouTube often returns 409 (Conflict) but still processes the request successfully.
+      // With queued mutations this should be rarer, but we still treat it as success.
+      if (e.message?.includes('409')) {
+        return { success: true };
+      }
+      // YouTube also intermittently returns 400 for stale playlist mutation state
+      // even when the dashboard can reconcile the real outcome via refresh.
+      // Don't surface that as an extension warning.
+      if (e.message?.includes('400')) {
+        debugLog('Muted removeFromPlaylist 400 response', {
+          playlistId,
+          videoId,
+          setVideoId,
+          error: e.message,
+        });
+        return { success: false, error: e.message || String(e) };
+      }
+      console.warn('Remove from playlist error:', e.message);
+      return { success: false, error: e.message || String(e) };
     }
-    console.warn('Remove from playlist error:', e.message);
-    return { success: false, error: e.message || String(e) };
-  }
+  });
 }
 
 // Remove video from Watch Later (convenience wrapper)
@@ -782,57 +865,63 @@ async function createPlaylist(title: string): Promise<{ success: boolean; playli
 
 // Delete a playlist
 async function deletePlaylist(playlistId: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    await innertubeRequest('playlist/delete', { playlistId });
-    return { success: true };
-  } catch (e: any) {
-    // 409 (Conflict) on delete means the playlist was already deleted or the
-    // deletion was processed despite the error response. Treat as success.
-    if (e.message?.includes('409')) {
+  return enqueuePlaylistMutation(playlistId, async () => {
+    try {
+      await innertubeRequest('playlist/delete', { playlistId });
       return { success: true };
+    } catch (e: any) {
+      // 409 (Conflict) on delete means the playlist was already deleted or the
+      // deletion was processed despite the error response. Treat as success.
+      if (e.message?.includes('409')) {
+        return { success: true };
+      }
+      console.warn('Delete playlist error:', e.message);
+      return { success: false, error: e.message || String(e) };
     }
-    console.warn('Delete playlist error:', e.message);
-    return { success: false, error: e.message || String(e) };
-  }
+  });
 }
 
 // Add video to playlist
 async function addToPlaylist(videoId: string, playlistId: string): Promise<boolean> {
-  try {
-    await innertubeRequest('browse/edit_playlist', {
-      playlistId,
-      actions: [{
-        addedVideoId: videoId,
-        action: 'ACTION_ADD_VIDEO',
-      }],
-    });
-    return true;
-  } catch (e: any) {
-    // Treat 409 as success - YouTube often returns this but still processes the request
-    if (e.message?.includes('409')) {
+  return enqueuePlaylistMutation(playlistId, async () => {
+    try {
+      await innertubeRequest('browse/edit_playlist', {
+        playlistId,
+        actions: [{
+          addedVideoId: videoId,
+          action: 'ACTION_ADD_VIDEO',
+        }],
+      });
       return true;
+    } catch (e: any) {
+      // Treat 409 as success - YouTube often returns this but still processes the request
+      if (e.message?.includes('409')) {
+        return true;
+      }
+      console.warn('Add to playlist error:', e.message);
+      return false;
     }
-    console.warn('Add to playlist error:', e.message);
-    return false;
-  }
+  });
 }
 
 // Rename a playlist
 async function renamePlaylist(playlistId: string, newTitle: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    await innertubeRequest('browse/edit_playlist', {
-      playlistId,
-      playlistName: newTitle,
-    });
-    return { success: true };
-  } catch (e: any) {
-    // Treat 409 as success - YouTube often returns this but still processes the request
-    if (e.message?.includes('409')) {
+  return enqueuePlaylistMutation(playlistId, async () => {
+    try {
+      await innertubeRequest('browse/edit_playlist', {
+        playlistId,
+        playlistName: newTitle,
+      });
       return { success: true };
+    } catch (e: any) {
+      // Treat 409 as success - YouTube often returns this but still processes the request
+      if (e.message?.includes('409')) {
+        return { success: true };
+      }
+      console.warn('Rename playlist error:', e.message);
+      return { success: false, error: e.message || String(e) };
     }
-    console.warn('Rename playlist error:', e.message);
-    return { success: false, error: e.message || String(e) };
-  }
+  });
 }
 
 // Move video within a playlist (reorder)
@@ -841,76 +930,82 @@ async function movePlaylistVideo(
   setVideoId: string,
   targetSetVideoId: string
 ): Promise<{ success: boolean; error?: string }> {
-  try {
-    await innertubeRequest('browse/edit_playlist', {
-      playlistId,
-      actions: [{
-        setVideoId,
-        action: 'ACTION_MOVE_VIDEO_BEFORE',
-        movedSetVideoIdSuccessor: targetSetVideoId,
-      }],
-    });
-    return { success: true };
-  } catch (e: any) {
-    // Treat 409 as success - YouTube often returns this but still processes the request
-    if (e.message?.includes('409')) {
+  return enqueuePlaylistMutation(playlistId, async () => {
+    try {
+      await innertubeRequest('browse/edit_playlist', {
+        playlistId,
+        actions: [{
+          setVideoId,
+          action: 'ACTION_MOVE_VIDEO_BEFORE',
+          movedSetVideoIdSuccessor: targetSetVideoId,
+        }],
+      });
       return { success: true };
+    } catch (e: any) {
+      // Treat 409 as success - YouTube often returns this but still processes the request
+      if (e.message?.includes('409')) {
+        return { success: true };
+      }
+      console.warn('Move playlist video error:', e.message);
+      return { success: false, error: e.message || String(e) };
     }
-    console.warn('Move playlist video error:', e.message);
-    return { success: false, error: e.message || String(e) };
-  }
+  });
 }
 
 // Move video to top of Watch Later
 async function moveToTop(setVideoId: string, firstSetVideoId?: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    // If no firstSetVideoId provided, or video is already first, skip
-    if (!firstSetVideoId || setVideoId === firstSetVideoId) {
+  return enqueuePlaylistMutation('WL', async () => {
+    try {
+      // If no firstSetVideoId provided, or video is already first, skip
+      if (!firstSetVideoId || setVideoId === firstSetVideoId) {
+        return { success: true };
+      }
+      await innertubeRequest('browse/edit_playlist', {
+        playlistId: 'WL',
+        actions: [{
+          setVideoId,
+          action: 'ACTION_MOVE_VIDEO_BEFORE',
+          movedSetVideoIdSuccessor: firstSetVideoId,
+        }],
+      });
       return { success: true };
+    } catch (e: any) {
+      // Treat 409 as success - YouTube often returns this but still processes the request
+      if (e.message?.includes('409')) {
+        return { success: true };
+      }
+      console.warn('Move to top error:', e.message);
+      return { success: false, error: e.message || String(e) };
     }
-    await innertubeRequest('browse/edit_playlist', {
-      playlistId: 'WL',
-      actions: [{
-        setVideoId,
-        action: 'ACTION_MOVE_VIDEO_BEFORE',
-        movedSetVideoIdSuccessor: firstSetVideoId,
-      }],
-    });
-    return { success: true };
-  } catch (e: any) {
-    // Treat 409 as success - YouTube often returns this but still processes the request
-    if (e.message?.includes('409')) {
-      return { success: true };
-    }
-    console.warn('Move to top error:', e.message);
-    return { success: false, error: e.message || String(e) };
-  }
+  });
 }
 
 // Move video to bottom of Watch Later
 async function moveToBottom(setVideoId: string, lastSetVideoId?: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    // If no lastSetVideoId provided, or video is already last, skip
-    if (!lastSetVideoId || setVideoId === lastSetVideoId) {
+  return enqueuePlaylistMutation('WL', async () => {
+    try {
+      // If no lastSetVideoId provided, or video is already last, skip
+      if (!lastSetVideoId || setVideoId === lastSetVideoId) {
+        return { success: true };
+      }
+      await innertubeRequest('browse/edit_playlist', {
+        playlistId: 'WL',
+        actions: [{
+          setVideoId,
+          action: 'ACTION_MOVE_VIDEO_AFTER',
+          movedSetVideoIdPredecessor: lastSetVideoId,
+        }],
+      });
       return { success: true };
+    } catch (e: any) {
+      // Treat 409 as success - YouTube often returns this but still processes the request
+      if (e.message?.includes('409')) {
+        return { success: true };
+      }
+      console.warn('Move to bottom error:', e.message);
+      return { success: false, error: e.message || String(e) };
     }
-    await innertubeRequest('browse/edit_playlist', {
-      playlistId: 'WL',
-      actions: [{
-        setVideoId,
-        action: 'ACTION_MOVE_VIDEO_AFTER',
-        movedSetVideoIdPredecessor: lastSetVideoId,
-      }],
-    });
-    return { success: true };
-  } catch (e: any) {
-    // Treat 409 as success - YouTube often returns this but still processes the request
-    if (e.message?.includes('409')) {
-      return { success: true };
-    }
-    console.warn('Move to bottom error:', e.message);
-    return { success: false, error: e.message || String(e) };
-  }
+  });
 }
 
 // Combined operation: Add to playlist and remove from Watch Later
