@@ -50,6 +50,9 @@ const PENDING_G_TIMEOUT_MS = 500;
 /** Duration to show toast notifications (ms) */
 const TOAST_DURATION_MS = 3000;
 
+/** Timeout for extension message roundtrips (ms) */
+const MESSAGE_TIMEOUT_MS = 45_000;
+
 /** Time-to-live for stale watched overrides without matching video (ms) */
 const STALE_OVERRIDE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -115,6 +118,10 @@ let isModalOpen = false;
 let isHelpOpen = false;
 let pendingG = false;
 let hiddenVideoIds = new Set();
+const watchLaterDeleteStates = new Map();
+const watchLaterDeleteQueue = [];
+let isProcessingWatchLaterDeleteQueue = false;
+let watchLaterDeleteRequestId = 0;
 
 // Lookup Maps for O(1) access by ID
 /** @type {Map<string, object>} */
@@ -344,11 +351,29 @@ function setSingleFocusedSelection(index) {
   updateMode();
 }
 
-function getFocusedVideoUrl(video) {
-  if (!video) return '';
-  return currentTab === 'watchlater'
+function getVideoUrlForTab(video, sourceTab = currentTab) {
+  if (!video || !video.id || isUnavailableVideo(video)) return '';
+  return sourceTab === 'watchlater'
     ? getWatchLaterVideoUrl(video)
     : `https://www.youtube.com/watch?v=${video.id}`;
+}
+
+function openVideoInYouTube(video, options = {}) {
+  if (!video) return;
+  const sourceTab = options.sourceTab || currentTab;
+  const url = getVideoUrlForTab(video, sourceTab);
+  if (!url) {
+    if (isUnavailableVideo(video)) {
+      showToast('Unavailable videos cannot be opened. Remove them instead.', 'info');
+    }
+    return;
+  }
+
+  window.open(url, '_blank');
+}
+
+function getFocusedVideoUrl(video) {
+  return getVideoUrlForTab(video);
 }
 
 function getFocusedChannelUrl(channel) {
@@ -619,7 +644,17 @@ function renderShortcuts() {
 // Message passing to background
 function sendMessage(message) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`Request timed out after ${Math.round(MESSAGE_TIMEOUT_MS / 1000)}s`));
+    }, MESSAGE_TIMEOUT_MS);
+
     chrome.runtime.sendMessage(message, (response) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
       } else {
@@ -790,7 +825,7 @@ async function loadNuTubeSettings() {
 async function loadLastTabPref() {
   return new Promise((resolve) => {
     chrome.storage.local.get(['lastActiveTab'], (result) => {
-      const candidate = result.lastActiveTab || nutubeSettings.defaultTab;
+      const candidate = nutubeSettings.defaultTab || result.lastActiveTab;
       const valid = ['watchlater', 'subscriptions', 'channels', 'playlists'];
       if (valid.includes(candidate)) {
         currentTab = candidate;
@@ -847,6 +882,31 @@ function updateHideWatchedIndicator() {
   if (hideWatchedIndicatorEl) {
     hideWatchedIndicatorEl.classList.toggle('active', hideWatched);
   }
+}
+
+function isUnavailableVideo(video) {
+  return !!video && (video.unavailable === true || String(video.id || '').startsWith('unavailable:'));
+}
+
+function getUnavailableWatchLaterVideos() {
+  return watchLaterVideos.filter(video => !isWatchLaterDeletePending(video) && isUnavailableVideo(video));
+}
+
+function autoCleanUnavailableWatchLaterVideos() {
+  if (currentTab !== 'watchlater') return;
+
+  const unavailableVideos = getUnavailableWatchLaterVideos();
+  if (unavailableVideos.length === 0) return;
+
+  void enqueueWatchLaterDeleteRequest(unavailableVideos);
+}
+
+function getRemovableVideoId(video) {
+  return isUnavailableVideo(video) ? '' : video.id;
+}
+
+function canRestoreDeletedVideo(video) {
+  return !!video && !isUnavailableVideo(video) && !!video.id;
 }
 
 function normalizeText(text) {
@@ -996,7 +1056,13 @@ function getWatchedProgress(video) {
   if (override) {
     return override.watched ? 100 : 0;
   }
-  return video.progressPercent || 0;
+
+  const progress = Number(video.progressPercent);
+  if (Number.isFinite(progress) && progress > 0) {
+    return Math.max(0, Math.min(100, progress));
+  }
+
+  return video.watched ? 100 : 0;
 }
 
 /**
@@ -1100,12 +1166,54 @@ function getPlaylistByQuickMove(number) {
 }
 
 // Toast notifications
-function showToast(message, type = 'info') {
+function clearToastTimer(toast) {
+  if (toast?._dismissTimer) {
+    clearTimeout(toast._dismissTimer);
+    toast._dismissTimer = null;
+  }
+}
+
+function dismissToast(toast, delay = 0) {
+  if (!toast) return;
+  clearToastTimer(toast);
+  const remove = () => toast.remove();
+  if (delay > 0) {
+    toast._dismissTimer = setTimeout(remove, delay);
+  } else {
+    remove();
+  }
+}
+
+function updateToast(toast, message, type = 'info', options = {}) {
+  if (!toast || !toast.isConnected) {
+    return showToast(message, type, options);
+  }
+  clearToastTimer(toast);
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  if (!options.persist) {
+    dismissToast(toast, options.duration ?? TOAST_DURATION_MS);
+  }
+  return toast;
+}
+
+function showToast(message, type = 'info', options = {}) {
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
   toast.textContent = message;
   toastContainer.appendChild(toast);
-  setTimeout(() => toast.remove(), TOAST_DURATION_MS);
+  if (!options.persist) {
+    dismissToast(toast, options.duration ?? TOAST_DURATION_MS);
+  }
+  return toast;
+}
+
+function showLoadingToast(message) {
+  return showToast(message, 'loading', { persist: true });
+}
+
+function resolveLoadingToast(toast, message, type = 'success', options = {}) {
+  return updateToast(toast, message, type, options.persist ? options : { ...options, persist: false });
 }
 
 // Tab switching
@@ -1214,6 +1322,9 @@ function switchTab(tab) {
   if (needsLoad) {
     loadData();
   }
+  if (tab === 'watchlater') {
+    autoCleanUnavailableWatchLaterVideos();
+  }
   setStatus('Ready');
 }
 
@@ -1242,9 +1353,9 @@ function renderPlaylistBrowser() {
   }
 
   videoList.innerHTML = filteredPlaylists.map((playlist, index) => {
-    const focused = index === focusedIndex ? 'focused' : '';
-    const thumbnailHtml = playlist.thumbnail
-      ? `<img src="${escapeHtml(playlist.thumbnail)}" alt="">`
+  const focused = index === focusedIndex ? 'focused' : '';
+  const thumbnailHtml = playlist.thumbnail
+      ? `<img src="${escapeHtml(fixUrl(playlist.thumbnail))}" alt="">`
       : `<span class="playlist-thumbnail-placeholder">&#9654;</span>`;
     return `<div class="playlist-browser-item ${focused}" data-index="${index}">
       <div class="playlist-thumbnail">${thumbnailHtml}</div>
@@ -1277,7 +1388,7 @@ async function drillIntoPlaylist(playlist) {
   breadcrumbNameEl.textContent = playlist.title;
 
   // Show loading state
-  setStatus(`Loading ${playlist.title}...`, 'loading');
+  const toast = showLoadingToast(`Loading ${playlist.title}...`);
   videoList.innerHTML = '<div class="loading"><div class="spinner"></div><span>Loading playlist...</span></div>';
 
   try {
@@ -1295,16 +1406,14 @@ async function drillIntoPlaylist(playlist) {
       searchInput.value = '';
       renderVideos();
       videoCountLabelEl.textContent = 'Videos:';
-      setStatus('Ready');
+      dismissToast(toast);
     } else {
-      showToast('Failed to load playlist', 'error');
-      setStatus('Error loading playlist', 'error');
+      resolveLoadingToast(toast, 'Failed to load playlist', 'error');
       drillOutOfPlaylist();
     }
   } catch (error) {
     errorLog('Failed to load playlist:', error);
-    showToast('Failed to load playlist', 'error');
-    setStatus('Error', 'error');
+    resolveLoadingToast(toast, 'Failed to load playlist', 'error');
     drillOutOfPlaylist();
   }
 }
@@ -1335,27 +1444,31 @@ function renderCurrentView() {
 }
 
 function buildVideoContextMenuItems(video) {
-  const items = [
-    {
-      label: 'Open in YouTube',
-      action: () => {
-        const url = getFocusedVideoUrl(video);
-        if (url) window.open(url, '_blank');
+  const items = [];
+
+  if (!isUnavailableVideo(video)) {
+    items.push(
+      {
+        label: 'Open in YouTube',
+        action: () => openVideoInYouTube(video),
       },
-    },
-    {
-      label: 'Copy URL',
-      action: async () => {
-        const url = getFocusedVideoUrl(video);
-        if (!url) return;
-        try {
-          await navigator.clipboard.writeText(url);
-          showToast('URL copied to clipboard', 'success');
-        } catch (_) {
-          showToast('Failed to copy URL', 'error');
-        }
+      {
+        label: 'Copy URL',
+        action: async () => {
+          const url = getFocusedVideoUrl(video);
+          if (!url) return;
+          try {
+            await navigator.clipboard.writeText(url);
+            showToast('URL copied to clipboard', 'success');
+          } catch (_) {
+            showToast('Failed to copy URL', 'error');
+          }
+        },
       },
-    },
+    );
+  }
+
+  items.push(
     {
       label: 'Edit note/tags',
       action: () => editFocusedVideoAnnotation(),
@@ -1364,7 +1477,7 @@ function buildVideoContextMenuItems(video) {
       label: isFullyWatched(video) ? 'Mark as Unwatched' : 'Mark as Watched',
       action: () => toggleWatched(),
     },
-  ];
+  );
 
   if (currentTab === 'watchlater') {
     items.push(
@@ -1471,7 +1584,7 @@ async function addToWatchLater() {
   const targets = getTargetVideos();
   if (targets.length === 0) return;
 
-  setStatus(`Adding ${targets.length} video(s) to Watch Later...`, 'loading');
+  const toast = showLoadingToast(`Adding ${targets.length} video(s) to Watch Later...`);
 
   const results = await runWithConcurrency(targets, async (video) => {
     const result = await sendMessage({
@@ -1488,6 +1601,10 @@ async function addToWatchLater() {
   const added = results.filter(r => r?.success).length;
   const failed = results.filter(r => !r?.success).length;
 
+  if (added > 0 || failed > 0) {
+    await refreshWatchLaterVideos();
+  }
+
   // Exit visual mode after adding
   visualModeStart = null;
   visualBlockMode = false;
@@ -1496,14 +1613,16 @@ async function addToWatchLater() {
 
   renderVideos();
   if (failed > 0) {
-    showToast(`Added ${added}/${targets.length} video(s)`, added > 0 ? 'warning' : 'error');
+    resolveLoadingToast(toast, `Added ${added}/${targets.length} video(s)`, added > 0 ? 'warning' : 'error');
   } else {
-    showToast(`Added ${added} video(s) to Watch Later`, 'success');
+    resolveLoadingToast(toast, `Added ${added} video(s) to Watch Later`, 'success');
   }
-  setStatus('Ready');
 }
 
 async function addVideoToPlaylist(video, playlistId) {
+  if (isUnavailableVideo(video)) {
+    return { success: false, error: 'Unavailable videos cannot be added to playlists.' };
+  }
   try {
     return await sendMessage({
       type: 'ADD_TO_PLAYLIST',
@@ -1519,7 +1638,7 @@ async function removeVideoFromPlaylist(video, playlistId) {
   try {
     return await sendMessage({
       type: 'REMOVE_FROM_PLAYLIST',
-      videoId: video.id,
+      videoId: getRemovableVideoId(video),
       setVideoId: video.setVideoId,
       playlistId,
     });
@@ -1532,7 +1651,7 @@ async function removeVideoFromWatchLater(video) {
   try {
     return await sendMessage({
       type: 'REMOVE_FROM_WATCH_LATER',
-      videoId: video.id,
+      videoId: getRemovableVideoId(video),
       setVideoId: video.setVideoId,
     });
   } catch (error) {
@@ -1588,15 +1707,8 @@ async function removeFromWatchLaterSub(video) {
   if (!wlVideo) return false;
 
   try {
-    const result = await sendMessage({
-      type: 'REMOVE_FROM_WATCH_LATER',
-      videoId: wlVideo.id,
-      setVideoId: wlVideo.setVideoId,
-    });
-    if (result.success || result.error?.includes('409')) {
-      // Remove from local cache
-      watchLaterVideos = watchLaterVideos.filter(v => v.id !== video.id);
-      watchLaterCountEl.textContent = watchLaterVideos.length;
+    const deletion = await removeWatchLaterVideoWithConfirmation(wlVideo);
+    if (deletion.removed) {
       return true;
     }
   } catch (e) {
@@ -1616,35 +1728,30 @@ async function toggleWatchLater() {
   if (!video) return;
 
   const inWL = isInWatchLater(video.id);
+  const toast = showLoadingToast(inWL ? 'Removing from Watch Later...' : 'Adding to Watch Later...');
 
   if (inWL) {
-    setStatus('Removing from Watch Later...', 'loading');
     const success = await removeFromWatchLaterSub(video);
     renderVideos();
-    showToast(success ? 'Removed from Watch Later' : 'Failed to remove', success ? 'success' : 'error');
+    resolveLoadingToast(toast, success ? 'Removed from Watch Later' : 'Failed to remove', success ? 'success' : 'error');
   } else {
-    setStatus('Adding to Watch Later...', 'loading');
     try {
       const result = await sendMessage({
         type: 'ADD_TO_WATCH_LATER',
         videoId: video.id,
       });
       if (result.success) {
-        if (!watchLaterVideos.find(v => v.id === video.id)) {
-          watchLaterVideos.unshift(video);
-          watchLaterCountEl.textContent = watchLaterVideos.length;
-        }
+        await refreshWatchLaterVideos();
         renderVideos();
-        showToast('Added to Watch Later', 'success');
+        resolveLoadingToast(toast, 'Added to Watch Later', 'success');
       } else {
-        showToast('Failed to add', 'error');
+        resolveLoadingToast(toast, 'Failed to add', 'error');
       }
     } catch (e) {
       errorLog('Add to WL failed:', e);
-      showToast('Failed to add', 'error');
+      resolveLoadingToast(toast, 'Failed to add', 'error');
     }
   }
-  setStatus('Ready');
 }
 
 /**
@@ -1759,12 +1866,380 @@ function isInWatchLater(videoId) {
   return watchLaterVideos.some(v => v.id === videoId);
 }
 
+function getVideoDeleteKey(video) {
+  return video?.setVideoId || video?.id || '';
+}
+
+function getWatchLaterDeleteState(video) {
+  return watchLaterDeleteStates.get(getVideoDeleteKey(video)) || null;
+}
+
+function setWatchLaterDeleteState(video, state) {
+  const key = getVideoDeleteKey(video);
+  if (!key) return;
+  watchLaterDeleteStates.set(key, state);
+}
+
+function clearWatchLaterDeleteState(video) {
+  const key = getVideoDeleteKey(video);
+  if (!key) return;
+  watchLaterDeleteStates.delete(key);
+}
+
+function isWatchLaterDeletePending(video) {
+  const state = getWatchLaterDeleteState(video);
+  return state?.phase === 'queued' || state?.phase === 'pending';
+}
+
+function focusVideoById(videoId, fallbackIndex = focusedIndex) {
+  const visibleIndex = filteredVideos.findIndex(video => video.id === videoId);
+  if (visibleIndex >= 0) {
+    focusedIndex = visibleIndex;
+    return;
+  }
+  focusedIndex = Math.min(fallbackIndex, Math.max(0, filteredVideos.length - 1));
+}
+
+function renderVideosWithPreferredFocus(videoId = null, fallbackIndex = focusedIndex) {
+  renderVideos();
+  focusVideoById(videoId, fallbackIndex);
+  renderVideos();
+}
+
+function getOptimisticWatchLaterCount() {
+  return watchLaterVideos.filter(video => !isWatchLaterDeletePending(video)).length;
+}
+
+function syncWatchLaterCountDisplay() {
+  watchLaterCountEl.textContent = getOptimisticWatchLaterCount();
+}
+
+function renderWatchLaterViewWithPreferredFocus(videoId = null, fallbackIndex = focusedIndex) {
+  syncWatchLaterCountDisplay();
+  if (currentTab === 'watchlater') {
+    renderVideosWithPreferredFocus(videoId, fallbackIndex);
+  }
+}
+
+function renderWatchLaterViewPreservingCurrentFocus() {
+  const liveFocusId = filteredVideos[focusedIndex]?.id || null;
+  const liveFocusIndex = focusedIndex;
+  renderWatchLaterViewWithPreferredFocus(liveFocusId, liveFocusIndex);
+}
+
+async function refreshWatchLaterVideos() {
+  try {
+    const response = await sendMessage({ type: 'GET_WATCH_LATER' });
+    if (!response.success) {
+      return false;
+    }
+    watchLaterVideos = response.data || [];
+    syncWatchLaterCountDisplay();
+    if (currentTab === 'watchlater') {
+      videos = watchLaterVideos;
+      autoCleanUnavailableWatchLaterVideos();
+    }
+    return true;
+  } catch (error) {
+    warnLog('Failed to refresh Watch Later:', error);
+    return false;
+  }
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function confirmWatchLaterDeletion(video, options = {}) {
+  const {
+    attempts = 4,
+    delayMs = 350,
+  } = options;
+
+  const key = getVideoDeleteKey(video);
+  if (!key) {
+    return { refreshed: false, stillExists: true, attemptsUsed: 0 };
+  }
+
+  let refreshed = false;
+  let stillExists = true;
+  let attemptsUsed = 0;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    attemptsUsed = attempt + 1;
+    refreshed = await refreshWatchLaterVideos();
+    stillExists = refreshed && watchLaterVideos.some(item => getVideoDeleteKey(item) === key);
+
+    if (!refreshed || !stillExists) {
+      break;
+    }
+
+    if (attempt + 1 < attempts) {
+      await delay(delayMs * attemptsUsed);
+    }
+  }
+
+  return { refreshed, stillExists, attemptsUsed };
+}
+
+async function removeWatchLaterVideoWithConfirmation(video, options = {}) {
+  const {
+    removeAttempts = 2,
+    confirmationOptions = {},
+  } = options;
+
+  let result = { success: false };
+  let confirmation = { refreshed: false, stillExists: true, attemptsUsed: 0 };
+
+  for (let attempt = 0; attempt < removeAttempts; attempt += 1) {
+    result = await removeVideoFromWatchLater(video);
+    confirmation = await confirmWatchLaterDeletion(video, confirmationOptions);
+
+    if (confirmation.refreshed && !confirmation.stillExists) {
+      return {
+        removed: true,
+        result,
+        confirmation,
+        removeAttemptsUsed: attempt + 1,
+      };
+    }
+
+    if (attempt + 1 < removeAttempts) {
+      await delay(250 * (attempt + 1));
+    }
+  }
+
+  return {
+    removed: false,
+    result,
+    confirmation,
+    removeAttemptsUsed: removeAttempts,
+  };
+}
+
+function pushVideoUndoEntry(action, data, originalVideos, originalFocusedIndex, originalSelectedIndices) {
+  undoStack.push({
+    action,
+    data,
+    originalVideos,
+    originalFocusedIndex,
+    originalSelectedIndices,
+    timestamp: Date.now()
+  });
+  if (undoStack.length > MAX_UNDO) {
+    undoStack.shift();
+  }
+}
+
+function getNextFocusVideoIdAfterEnqueue(targets) {
+  const targetKeys = new Set(targets.map(getVideoDeleteKey).filter(Boolean));
+  if (targetKeys.size === 0) return null;
+
+  const targetIndexes = targets
+    .map(video => filteredVideos.findIndex(item => getVideoDeleteKey(item) === getVideoDeleteKey(video)))
+    .filter(index => index >= 0)
+    .sort((a, b) => a - b);
+
+  if (targetIndexes.length === 0) {
+    return filteredVideos[focusedIndex]?.id || null;
+  }
+
+  const maxIndex = targetIndexes[targetIndexes.length - 1];
+  for (let index = maxIndex + 1; index < filteredVideos.length; index += 1) {
+    const video = filteredVideos[index];
+    if (!targetKeys.has(getVideoDeleteKey(video))) {
+      return video.id;
+    }
+  }
+
+  const minIndex = targetIndexes[0];
+  for (let index = minIndex - 1; index >= 0; index -= 1) {
+    const video = filteredVideos[index];
+    if (!targetKeys.has(getVideoDeleteKey(video))) {
+      return video.id;
+    }
+  }
+
+  return null;
+}
+
+async function processWatchLaterDeleteRequest(request) {
+  const removedVideos = [];
+  const failedVideos = [];
+
+  for (let index = 0; index < request.targets.length; index += 1) {
+    const video = request.targets[index];
+    const key = getVideoDeleteKey(video);
+    if (!key) {
+      failedVideos.push(video);
+      continue;
+    }
+
+    setWatchLaterDeleteState(video, {
+      phase: 'pending',
+      current: index + 1,
+      total: request.targets.length,
+      requestId: request.id,
+    });
+    renderWatchLaterViewPreservingCurrentFocus();
+    updateToast(
+      request.toast,
+      `Deleting ${index + 1}/${request.targets.length}`,
+      'loading',
+      { persist: true }
+    );
+
+    const deletion = await removeWatchLaterVideoWithConfirmation(video);
+    const { result, confirmation, removeAttemptsUsed } = deletion;
+    const { refreshed, stillExists } = confirmation;
+
+    if (deletion.removed) {
+      clearWatchLaterDeleteState(video);
+      removedVideos.push(video);
+    } else {
+      clearWatchLaterDeleteState(video);
+      failedVideos.push(video);
+      const failureReason = !refreshed
+        ? 'Refresh failed'
+        : stillExists
+          ? `Still present after ${confirmation.attemptsUsed} refresh attempt(s) and ${removeAttemptsUsed} delete attempt(s)`
+          : (result?.error || 'Delete not confirmed');
+      const failureMessage = result?.error
+        ? `${failureReason} (${result.error})`
+        : failureReason;
+      warnLog('Watch Later delete not confirmed:', video.title, failureMessage);
+    }
+
+    renderWatchLaterViewPreservingCurrentFocus();
+
+    if (index + 1 < request.targets.length) {
+      const restoredCount = failedVideos.length;
+      const restoredLabel = restoredCount > 0 ? `, restored ${restoredCount}` : '';
+      updateToast(
+        request.toast,
+        `Deleting ${index + 1}/${request.targets.length}${restoredLabel}`,
+        'loading',
+        { persist: true }
+      );
+    }
+  }
+
+  const undoableRemovedVideos = removedVideos.filter(canRestoreDeletedVideo);
+
+  if (undoableRemovedVideos.length > 0 && request.options.undoAction) {
+    pushVideoUndoEntry(
+      request.options.undoAction,
+      { videos: [...undoableRemovedVideos] },
+      request.originalVideos,
+      request.originalFocusedIndex,
+      request.originalSelectedIndices
+    );
+  }
+
+  return { removedVideos, failedVideos };
+}
+
+async function processWatchLaterDeleteQueue() {
+  if (isProcessingWatchLaterDeleteQueue) return;
+  isProcessingWatchLaterDeleteQueue = true;
+
+  try {
+    while (watchLaterDeleteQueue.length > 0) {
+      const request = watchLaterDeleteQueue.shift();
+      const result = await processWatchLaterDeleteRequest(request);
+      if (result.failedVideos.length > 0) {
+        updateToast(
+          request.toast,
+          `Deleted ${result.removedVideos.length}/${request.targets.length}. Restored ${result.failedVideos.length}.`,
+          'error',
+          { persist: true }
+        );
+      } else {
+        updateToast(
+          request.toast,
+          `Deleted ${result.removedVideos.length} video(s)`,
+          'success'
+        );
+      }
+      request.resolve(result);
+    }
+  } finally {
+    isProcessingWatchLaterDeleteQueue = false;
+    setStatus('Ready');
+  }
+}
+
+function enqueueWatchLaterDeleteRequest(targets, options = {}) {
+  const orderedTargets = targets
+    .filter(Boolean)
+    .map(video => ({ ...video }))
+    .sort((a, b) => {
+      const aIndex = filteredVideos.findIndex(item => getVideoDeleteKey(item) === getVideoDeleteKey(a));
+      const bIndex = filteredVideos.findIndex(item => getVideoDeleteKey(item) === getVideoDeleteKey(b));
+      return aIndex - bIndex;
+    });
+
+  if (orderedTargets.length === 0) {
+    return Promise.resolve({ removedVideos: [], failedVideos: [] });
+  }
+
+  const enqueueableTargets = orderedTargets.filter(video => {
+    const state = getWatchLaterDeleteState(video);
+    return !state || state.phase === 'failed';
+  });
+
+  if (enqueueableTargets.length === 0) {
+    return Promise.resolve({ removedVideos: [], failedVideos: [] });
+  }
+
+  const originalVideos = [...videos];
+  const originalFocusedIndex = focusedIndex;
+  const originalSelectedIndices = new Set(selectedIndices);
+  const nextFocusVideoId = getNextFocusVideoIdAfterEnqueue(enqueueableTargets);
+
+  visualModeStart = null;
+  visualBlockMode = false;
+  selectedIndices.clear();
+  updateMode();
+
+  enqueueableTargets.forEach((video, index) => {
+    setWatchLaterDeleteState(video, {
+      phase: 'queued',
+      current: index + 1,
+      total: enqueueableTargets.length,
+      requestId: watchLaterDeleteRequestId + 1,
+    });
+  });
+
+  renderWatchLaterViewWithPreferredFocus(nextFocusVideoId, Math.min(focusedIndex, Math.max(0, filteredVideos.length - 1)));
+  const toast = showToast(
+    `Deleting 0/${enqueueableTargets.length}`,
+    'loading',
+    { persist: true }
+  );
+
+  return new Promise((resolve) => {
+    const request = {
+      id: ++watchLaterDeleteRequestId,
+      targets: enqueueableTargets,
+      options,
+      originalVideos,
+      originalFocusedIndex,
+      originalSelectedIndices,
+      toast,
+      resolve,
+    };
+    watchLaterDeleteQueue.push(request);
+    void processWatchLaterDeleteQueue();
+  });
+}
+
 // Render video list
 function renderVideos() {
   const query = searchQuery.trim();
 
   // Base filter: exclude hidden videos
-  let baseFilter = v => !hiddenVideoIds.has(v.id);
+  let baseFilter = v => !hiddenVideoIds.has(v.id) && !isWatchLaterDeletePending(v);
 
   // Hide fully-watched videos when toggle is active
   if (hideWatched) {
@@ -1802,15 +2277,19 @@ function renderVideos() {
     const inWL = currentTab === 'subscriptions' && isInWatchLater(video.id);
     const progress = getWatchedProgress(video);
     const fullyWatched = progress >= 100;
+    const unavailable = isUnavailableVideo(video);
     const annotation = getVideoAnnotation(video.id);
     const hasAnnotation = annotation.note || (annotation.tags && annotation.tags.length > 0);
+    const thumbnailMarkup = video.thumbnail
+      ? `<img class="video-thumbnail" src="${fixUrl(video.thumbnail)}" alt="" loading="lazy">`
+      : `<div class="video-thumbnail video-thumbnail-fallback">Unavailable</div>`;
     return `
-    <div class="video-item ${selectedIndices.has(index) ? 'selected' : ''} ${focusedIndex === index ? 'focused' : ''} ${fullyWatched ? 'fully-watched' : ''}"
+    <div class="video-item ${selectedIndices.has(index) ? 'selected' : ''} ${focusedIndex === index ? 'focused' : ''} ${fullyWatched ? 'fully-watched' : ''} ${unavailable ? 'unavailable' : ''}"
          data-index="${index}"
          data-video-id="${video.id}">
       <span class="video-index">${index + 1}</span>
       <div class="thumbnail-wrapper">
-        <img class="video-thumbnail" src="${fixUrl(video.thumbnail)}" alt="" loading="lazy">
+        ${thumbnailMarkup}
         ${progress > 0 ? `<div class="video-progress" style="width: ${progress}%"></div>` : ''}
       </div>
       <div class="video-info">
@@ -1818,6 +2297,7 @@ function renderVideos() {
         <div class="video-channel">${escapeHtml(video.channel)}</div>
       </div>
       <div class="video-meta">
+        ${unavailable ? '<span class="unavailable-indicator" title="Unavailable video">Unavailable</span>' : ''}
         ${inWL ? '<span class="wl-check" title="In Watch Later">&#10003;</span>' : ''}
         ${hasAnnotation ? '<span class="wl-check" title="Annotated">&#128221;</span>' : ''}
         <span class="video-duration">${video.duration || '--:--'}</span>
@@ -1827,8 +2307,9 @@ function renderVideos() {
   }).join('');
 
   videoCountLabelEl.textContent = 'Videos:';
-  videoCountEl.textContent = videos.length;
+  videoCountEl.textContent = currentTab === 'watchlater' ? getOptimisticWatchLaterCount() : videos.length;
   selectedCountEl.textContent = selectedIndices.size;
+  syncWatchLaterCountDisplay();
 
   scrollFocusedIntoView();
 }
@@ -2040,12 +2521,15 @@ function closeChannelPreview() {
 // Build URL for Watch Later video with playlist context
 function getWatchLaterVideoUrl(video) {
   const index = watchLaterVideos.findIndex(v => v.id === video.id) + 1;
-  return `https://www.youtube.com/watch?v=${video.id}&list=WL&index=${index}`;
+  if (index > 0) {
+    return `https://www.youtube.com/watch?v=${video.id}&list=WL&index=${index}`;
+  }
+  return `https://www.youtube.com/watch?v=${video.id}&list=WL`;
 }
 
 // Video Preview - opens directly on YouTube since embeds don't work from chrome-extension:// origin
-function showVideoPreview(video) {
-  window.open(getWatchLaterVideoUrl(video), '_blank');
+function showVideoPreview(video, options = {}) {
+  openVideoInYouTube(video, { sourceTab: options.sourceTab || currentTab });
 }
 
 async function editFocusedVideoAnnotation() {
@@ -2322,7 +2806,7 @@ function previewChannelVideo() {
   if (!video) return;
 
   // Open video directly (no modal stack since it opens in new tab)
-  showVideoPreview(video);
+  showVideoPreview(video, { sourceTab: 'channels' });
 }
 
 function scrollChannelVideos(direction) {
@@ -2461,7 +2945,7 @@ async function executeUnsubscribe(channel) {
   const originalIndex = channels.findIndex(c => c.id === channel.id);
   const channelCopy = { ...channel };
 
-  setStatus(`Unsubscribing from ${channel.name}...`, 'loading');
+  const toast = showLoadingToast(`Unsubscribing from ${channel.name}...`);
   try {
     const result = await sendMessage({ type: 'UNSUBSCRIBE', channelId: channel.id });
     if (result.success) {
@@ -2484,15 +2968,15 @@ async function executeUnsubscribe(channel) {
       renderChannels();
 
       // Show undo toast with 5-second duration
+      dismissToast(toast);
       showChannelUndoToast(channelCopy);
     } else {
-      showToast('Failed to unsubscribe', 'error');
+      resolveLoadingToast(toast, 'Failed to unsubscribe', 'error');
     }
   } catch (e) {
     errorLog('Unsubscribe failed:', e);
-    showToast('Failed to unsubscribe', 'error');
+    resolveLoadingToast(toast, 'Failed to unsubscribe', 'error');
   }
-  setStatus('Ready');
 }
 
 // Show toast with undo option for channel unsubscribe
@@ -2519,7 +3003,7 @@ async function undoChannelUnsubscribe() {
     return;
   }
 
-  setStatus(`Resubscribing to ${lastAction.channel.name}...`, 'loading');
+  const toast = showLoadingToast(`Resubscribing to ${lastAction.channel.name}...`);
   try {
     const result = await sendMessage({ type: 'SUBSCRIBE', channelId: lastAction.channel.id });
     if (result.success) {
@@ -2529,18 +3013,17 @@ async function undoChannelUnsubscribe() {
       channelsCountEl.textContent = channels.length;
       focusedIndex = insertIndex;
       renderChannels();
-      showToast(`Resubscribed to ${lastAction.channel.name}`, 'success');
+      resolveLoadingToast(toast, `Resubscribed to ${lastAction.channel.name}`, 'success');
     } else {
       // Put it back on the stack if failed
       channelUndoStack.push(lastAction);
-      showToast('Failed to resubscribe', 'error');
+      resolveLoadingToast(toast, 'Failed to resubscribe', 'error');
     }
   } catch (e) {
     errorLog('Resubscribe failed:', e);
     channelUndoStack.push(lastAction);
-    showToast('Failed to resubscribe', 'error');
+    resolveLoadingToast(toast, 'Failed to resubscribe', 'error');
   }
-  setStatus('Ready');
 }
 
 // Legacy confirm modal functions (kept for other potential uses)
@@ -2683,18 +3166,14 @@ function toggleSelection(index) {
 // Get videos to operate on (selected or focused)
 function getTargetVideos() {
   if (selectedIndices.size > 0) {
-    return Array.from(selectedIndices).map(i => filteredVideos[i]).filter(Boolean);
+    return Array.from(selectedIndices).sort((a, b) => a - b).map(i => filteredVideos[i]).filter(Boolean);
   }
   return filteredVideos[focusedIndex] ? [filteredVideos[focusedIndex]] : [];
 }
 
 async function syncCurrentListFromYouTube() {
   if (currentTab === 'watchlater') {
-    const response = await sendMessage({ type: 'GET_WATCH_LATER' });
-    if (response.success) {
-      watchLaterVideos = response.data || [];
-      videos = watchLaterVideos;
-      watchLaterCountEl.textContent = watchLaterVideos.length;
+    if (await refreshWatchLaterVideos()) {
       renderVideos();
     }
     return;
@@ -2734,7 +3213,7 @@ async function undo() {
   }
 
   const lastAction = undoStack.pop();
-  setStatus(`Undoing ${lastAction.action}...`, 'loading');
+  const toast = showLoadingToast(`Undoing ${lastAction.action}...`);
 
   try {
     switch (lastAction.action) {
@@ -2760,7 +3239,7 @@ async function undo() {
         focusedIndex = lastAction.originalFocusedIndex;
         selectedIndices = lastAction.originalSelectedIndices;
         renderVideos();
-        showToast(`Restored ${restored}/${lastAction.data.videos.length} videos`, restored > 0 ? 'success' : 'error');
+        resolveLoadingToast(toast, `Restored ${restored}/${lastAction.data.videos.length} videos`, restored > 0 ? 'success' : 'error');
         break;
       }
       case 'move_to_playlist': {
@@ -2785,7 +3264,7 @@ async function undo() {
         focusedIndex = lastAction.originalFocusedIndex;
         selectedIndices = lastAction.originalSelectedIndices;
         renderVideos();
-        showToast(`Restored ${restored}/${lastAction.data.videos.length} videos`, restored > 0 ? 'success' : 'error');
+        resolveLoadingToast(toast, `Restored ${restored}/${lastAction.data.videos.length} videos`, restored > 0 ? 'success' : 'error');
         break;
       }
       case 'move_to_top':
@@ -2798,7 +3277,7 @@ async function undo() {
         selectedIndices = lastAction.originalSelectedIndices;
         renderVideos();
         await syncCurrentListFromYouTube();
-        showToast('Position restored and synced with YouTube', 'success');
+        resolveLoadingToast(toast, 'Position restored and synced with YouTube', 'success');
         break;
       }
       case 'delete_from_playlist': {
@@ -2824,60 +3303,23 @@ async function undo() {
         focusedIndex = lastAction.originalFocusedIndex;
         selectedIndices = lastAction.originalSelectedIndices;
         renderVideos();
-        showToast(`Restored ${restored}/${lastAction.data.videos.length} video(s) to playlist`, restored > 0 ? 'success' : 'error');
+        resolveLoadingToast(toast, `Restored ${restored}/${lastAction.data.videos.length} video(s) to playlist`, restored > 0 ? 'success' : 'error');
         break;
       }
       default:
-        showToast('Cannot undo this action', 'error');
+        resolveLoadingToast(toast, 'Cannot undo this action', 'error');
     }
   } catch (error) {
     errorLog('Undo error:', error);
-    showToast('Undo failed', 'error');
+    resolveLoadingToast(toast, 'Undo failed', 'error');
   }
-
-  setStatus('Ready');
 }
 
 // Operations
 async function deleteVideos() {
   const targets = getTargetVideos();
   if (targets.length === 0) return;
-
-  // Save for undo
-  saveUndoState('delete', { videos: [...targets] });
-
-  // Optimistically update UI immediately
-  const targetIds = new Set(targets.map(v => v.id));
-  videos = videos.filter(v => !targetIds.has(v.id));
-
-  // Exit visual mode after delete
-  visualModeStart = null;
-  visualBlockMode = false;
-  selectedIndices.clear();
-  updateMode();
-
-  focusedIndex = Math.min(focusedIndex, Math.max(0, videos.length - 1));
-  renderVideos();
-
-  // Show initial toast - user can continue immediately
-  showToast(`Deleting ${targets.length} video(s)...`);
-  setStatus(`Deleting ${targets.length} video(s)...`);
-
-  // Process API calls in background
-  (async () => {
-    const results = await runWithConcurrency(targets, async video => removeVideoFromWatchLater(video));
-    const errors = results
-      .filter(r => r && !r.success && r.error)
-      .map(r => r.error);
-    // Note: YouTube often returns 409 errors but still processes requests successfully
-    if (errors.length > 0 && !errors.every(e => e.includes('409'))) {
-      warnLog('Delete had non-409 errors:', errors);
-      showToast(`Deleted with ${errors.length} error(s)`, 'warning');
-    } else {
-      showToast(`Deleted ${targets.length} video(s)`, 'success');
-    }
-    setStatus('Ready');
-  })();
+  void enqueueWatchLaterDeleteRequest(targets, { undoAction: 'delete' });
 }
 
 /**
@@ -2890,11 +3332,13 @@ async function deleteFromPlaylist() {
   const targets = getTargetVideos();
   if (targets.length === 0) return;
 
-  // Save undo state
-  saveUndoState('delete_from_playlist', {
-    videos: targets,
-    playlistId: activePlaylistId,
-  });
+  const undoableTargets = targets.filter(canRestoreDeletedVideo);
+  if (undoableTargets.length > 0) {
+    saveUndoState('delete_from_playlist', {
+      videos: undoableTargets,
+      playlistId: activePlaylistId,
+    });
+  }
 
   // Optimistically update UI
   const targetIds = new Set(targets.map(v => v.id));
@@ -2910,8 +3354,7 @@ async function deleteFromPlaylist() {
   focusedIndex = Math.min(focusedIndex, Math.max(0, videos.length - 1));
   renderVideos();
 
-  showToast(`Removing ${targets.length} video(s)...`);
-  setStatus(`Removing ${targets.length} video(s)...`, 'loading');
+  const toast = showLoadingToast(`Removing ${targets.length} video(s)...`);
 
   // Process API calls in background
   (async () => {
@@ -2924,11 +3367,10 @@ async function deleteFromPlaylist() {
       .map(r => r.error);
     if (errors.length > 0 && !errors.every(e => e.includes('409'))) {
       warnLog('Remove from playlist had errors:', errors);
-      showToast(`Removed with ${errors.length} error(s)`, 'warning');
+      resolveLoadingToast(toast, `Removed with ${errors.length} error(s)`, 'warning');
     } else {
-      showToast(`Removed ${targets.length} video(s) from playlist`, 'success');
+      resolveLoadingToast(toast, `Removed ${targets.length} video(s) from playlist`, 'success');
     }
-    setStatus('Ready');
   })();
 }
 
@@ -2942,7 +3384,7 @@ async function createNewPlaylist() {
   if (!title || !title.trim()) return;
 
   const trimmedTitle = title.trim();
-  setStatus('Creating playlist...', 'loading');
+  const toast = showLoadingToast('Creating playlist...');
 
   try {
     const result = await sendMessage({
@@ -2958,21 +3400,22 @@ async function createNewPlaylist() {
       };
       playlists = [...playlists, newPlaylist];
       rebuildPlaylistMap();
-      playlistsCountEl.textContent = playlists.length;
+      if (playlistsCountEl) {
+        playlistsCountEl.textContent = playlists.length;
+      }
       // Clear search so the new playlist is visible
       searchQuery = '';
       searchInput.value = '';
       focusedIndex = playlists.length - 1;
       renderPlaylistBrowser();
-      showToast(`Created "${trimmedTitle}"`, 'success');
+      resolveLoadingToast(toast, `Created "${trimmedTitle}"`, 'success');
     } else {
-      showToast('Failed to create playlist', 'error');
+      resolveLoadingToast(toast, 'Failed to create playlist', 'error');
     }
   } catch (error) {
     errorLog('Create playlist error:', error);
-    showToast('Failed to create playlist', 'error');
+    resolveLoadingToast(toast, 'Failed to create playlist', 'error');
   }
-  setStatus('Ready');
 }
 
 async function deleteSelectedPlaylist() {
@@ -2986,7 +3429,7 @@ async function deleteSelectedPlaylist() {
   });
   if (!confirmed) return;
 
-  setStatus('Deleting playlist...', 'loading');
+  const toast = showLoadingToast('Deleting playlist...');
 
   try {
     const result = await sendMessage({
@@ -2997,18 +3440,19 @@ async function deleteSelectedPlaylist() {
     if (result.success) {
       playlists = playlists.filter(p => p.id !== playlist.id);
       rebuildPlaylistMap();
-      playlistsCountEl.textContent = playlists.length;
+      if (playlistsCountEl) {
+        playlistsCountEl.textContent = playlists.length;
+      }
       focusedIndex = Math.min(focusedIndex, Math.max(0, playlists.length - 1));
       renderPlaylistBrowser();
-      showToast(`Deleted "${playlist.title}"`, 'success');
+      resolveLoadingToast(toast, `Deleted "${playlist.title}"`, 'success');
     } else {
-      showToast('Failed to delete playlist', 'error');
+      resolveLoadingToast(toast, 'Failed to delete playlist', 'error');
     }
   } catch (error) {
     errorLog('Delete playlist error:', error);
-    showToast('Failed to delete playlist', 'error');
+    resolveLoadingToast(toast, 'Failed to delete playlist', 'error');
   }
-  setStatus('Ready');
 }
 
 async function renameSelectedPlaylist() {
@@ -3024,7 +3468,7 @@ async function renameSelectedPlaylist() {
   if (!newTitle || !newTitle.trim() || newTitle.trim() === playlist.title) return;
 
   const trimmedTitle = newTitle.trim();
-  setStatus('Renaming playlist...', 'loading');
+  const toast = showLoadingToast('Renaming playlist...');
 
   try {
     const result = await sendMessage({
@@ -3040,15 +3484,14 @@ async function renameSelectedPlaylist() {
         playlistInMain.title = trimmedTitle;
       }
       renderPlaylistBrowser();
-      showToast(`Renamed to "${trimmedTitle}"`, 'success');
+      resolveLoadingToast(toast, `Renamed to "${trimmedTitle}"`, 'success');
     } else {
-      showToast('Failed to rename playlist', 'error');
+      resolveLoadingToast(toast, 'Failed to rename playlist', 'error');
     }
   } catch (error) {
     errorLog('Rename playlist error:', error);
-    showToast('Failed to rename playlist', 'error');
+    resolveLoadingToast(toast, 'Failed to rename playlist', 'error');
   }
-  setStatus('Ready');
 }
 
 async function movePlaylistVideoUp() {
@@ -3340,31 +3783,33 @@ function applySortToPlaylists(playlistsToSort) {
   return sorted;
 }
 
-/**
- * Open the bulk purge confirmation dialog showing all watched videos
- */
-function openPurgeDialog() {
+function openWatchLaterBulkDeleteDialog({ title, videosToDelete, metricLabel = '', onConfirm: onConfirmDelete }) {
   const purgeModal = document.getElementById('purge-modal');
   if (purgeModal.style.display === 'flex') return;
 
-  const watchedVideos = videos.filter(v => !hiddenVideoIds.has(v.id) && isFullyWatched(v));
-  if (watchedVideos.length === 0) {
-    showToast('No watched videos to remove', 'info');
+  if (videosToDelete.length === 0) {
+    showToast(`No ${metricLabel || 'videos'} to remove`, 'info');
     return;
   }
+  const purgeTitle = document.getElementById('purge-title');
   const purgeList = document.getElementById('purge-list');
   const purgeCount = document.getElementById('purge-count');
 
-  purgeCount.textContent = `${watchedVideos.length} video(s)`;
-  purgeList.innerHTML = watchedVideos.map(video => {
-    const progress = getWatchedProgress(video);
+  if (purgeTitle) {
+    purgeTitle.textContent = title;
+  }
+  purgeCount.textContent = `${videosToDelete.length} video(s)`;
+  purgeList.innerHTML = videosToDelete.map(video => {
+    const metaLabel = metricLabel === 'unavailable videos'
+      ? 'Unavailable'
+      : `${getWatchedProgress(video)}%`;
     return `
       <div class="purge-item">
         <div>
           <div class="purge-item-title">${escapeHtml(video.title)}</div>
           <div class="purge-item-channel">${escapeHtml(video.channel)}</div>
         </div>
-        <div class="purge-item-progress">${progress}%</div>
+        <div class="purge-item-progress">${metaLabel}</div>
       </div>
     `;
   }).join('');
@@ -3376,14 +3821,14 @@ function openPurgeDialog() {
 
   const cleanup = () => {
     purgeModal.style.display = 'none';
-    confirmBtn.removeEventListener('click', onConfirm);
+    confirmBtn.removeEventListener('click', handleConfirm);
     cancelBtn.removeEventListener('click', onCancel);
     document.removeEventListener('keydown', onKey, true);
   };
 
-  const onConfirm = () => {
+  const handleConfirm = () => {
     cleanup();
-    executePurge(watchedVideos);
+    onConfirmDelete(videosToDelete);
   };
 
   const onCancel = () => {
@@ -3396,42 +3841,34 @@ function openPurgeDialog() {
       onCancel();
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      onConfirm();
+      handleConfirm();
     }
   };
 
-  confirmBtn.addEventListener('click', onConfirm);
+  confirmBtn.addEventListener('click', handleConfirm);
   cancelBtn.addEventListener('click', onCancel);
   document.addEventListener('keydown', onKey, true);
 }
 
 /**
- * Execute the bulk purge — remove all watched videos from Watch Later
+ * Open the bulk purge confirmation dialog showing all watched videos
+ */
+function openPurgeDialog() {
+  const sourceVideos = currentTab === 'watchlater' ? watchLaterVideos : videos;
+  const watchedVideos = sourceVideos.filter(v => isFullyWatched(v));
+  openWatchLaterBulkDeleteDialog({
+    title: 'Remove Watched Videos',
+    videosToDelete: watchedVideos,
+    metricLabel: 'watched videos',
+    onConfirm: executePurge,
+  });
+}
+
+/**
+ * Execute the bulk purge - remove all watched videos from Watch Later
  */
 async function executePurge(watchedVideos) {
-  setStatus(`Removing ${watchedVideos.length} watched videos...`, 'loading');
-
-  const results = await runWithConcurrency(watchedVideos, async video => removeVideoFromWatchLater(video));
-  const removedVideos = watchedVideos.filter((_, index) => results[index]?.success);
-  const removed = removedVideos.length;
-
-  // Remove from local state
-  const removedIds = new Set(removedVideos.map(v => v.id));
-  videos = videos.filter(v => !removedIds.has(v.id));
-  watchLaterVideos = watchLaterVideos.filter(v => !removedIds.has(v.id));
-
-  // Push undo entry using saveUndoState pattern
-  if (removedVideos.length > 0) {
-    saveUndoState('delete', { videos: [...removedVideos] });
-  }
-
-  selectedIndices.clear();
-  renderVideos();
-  // Clamp after renderVideos recomputes filteredVideos
-  focusedIndex = Math.min(focusedIndex, Math.max(0, filteredVideos.length - 1));
-  renderVideos();
-  setStatus(`Removed ${removed} watched video(s)`, 'success');
-  showToast(`Purged ${removed} watched video(s)`, 'success');
+  await enqueueWatchLaterDeleteRequest(watchedVideos, { undoAction: 'delete' });
 }
 
 async function moveToTop() {
@@ -3463,8 +3900,7 @@ async function moveToTop() {
   renderVideos();
 
   // Show initial toast - user can continue immediately
-  showToast(`Moving ${targets.length} video(s) to top...`);
-  setStatus(`Moving ${targets.length} video(s) to top...`);
+  const toast = showLoadingToast(`Moving ${targets.length} video(s) to top...`);
 
   // Process API calls in background - move in reverse order to maintain relative order
   const firstNonTargetVideo = videos.find(v => !targetIds.has(v.id));
@@ -3481,11 +3917,10 @@ async function moveToTop() {
     );
     const errors = results.filter(r => r && !r.success && r.error);
     if (errors.length > 0) {
-      showToast(`Move to top had ${errors.length} error(s)`, 'warning');
+      resolveLoadingToast(toast, `Move to top had ${errors.length} error(s)`, 'warning');
     } else {
-      showToast('Moved to top', 'success');
+      resolveLoadingToast(toast, 'Moved to top', 'success');
     }
-    setStatus('Ready');
   })();
 }
 
@@ -3637,8 +4072,7 @@ async function moveToBottom() {
   renderVideos();
 
   // Show initial toast - user can continue immediately
-  showToast(`Moving ${targets.length} video(s) to bottom...`);
-  setStatus(`Moving ${targets.length} video(s) to bottom...`);
+  const toast = showLoadingToast(`Moving ${targets.length} video(s) to bottom...`);
 
   // Process API calls in background
   const lastNonTargetVideo = videos.filter(v => !targetIds.has(v.id)).pop();
@@ -3655,11 +4089,10 @@ async function moveToBottom() {
     );
     const errors = results.filter(r => r && !r.success && r.error);
     if (errors.length > 0) {
-      showToast(`Move to bottom had ${errors.length} error(s)`, 'warning');
+      resolveLoadingToast(toast, `Move to bottom had ${errors.length} error(s)`, 'warning');
     } else {
-      showToast('Moved to bottom', 'success');
+      resolveLoadingToast(toast, 'Moved to bottom', 'success');
     }
-    setStatus('Ready');
   })();
 }
 
@@ -3667,12 +4100,23 @@ async function moveToPlaylist(playlistId) {
   const targets = getTargetVideos();
   if (targets.length === 0) return;
 
+  const movableTargets = targets.filter(video => !isUnavailableVideo(video));
+  const skippedCount = targets.length - movableTargets.length;
+
+  if (movableTargets.length === 0) {
+    showToast('Unavailable videos can only be removed from the list.', 'info');
+    return;
+  }
+  if (skippedCount > 0) {
+    showToast(`Skipping ${skippedCount} unavailable video(s)`, 'warning');
+  }
+
   // Save for undo
   const playlist = getPlaylistById(playlistId);
-  saveUndoState('move_to_playlist', { videos: [...targets], playlistId, playlistTitle: playlist?.title });
+  saveUndoState('move_to_playlist', { videos: [...movableTargets], playlistId, playlistTitle: playlist?.title });
 
   // Optimistically update UI immediately
-  const targetIds = new Set(targets.map(v => v.id));
+  const targetIds = new Set(movableTargets.map(v => v.id));
   videos = videos.filter(v => !targetIds.has(v.id));
 
   // Exit visual mode after move
@@ -3685,12 +4129,11 @@ async function moveToPlaylist(playlistId) {
   renderVideos();
 
   // Show initial toast - user can continue immediately
-  showToast(`Moving ${targets.length} video(s) to ${playlist?.title}...`);
-  setStatus(`Moving ${targets.length} video(s) to ${playlist?.title}...`);
+  const toast = showLoadingToast(`Moving ${movableTargets.length} video(s) to ${playlist?.title}...`);
 
   // Process API calls in background
   (async () => {
-    const results = await runWithConcurrency(targets, async (video) => (
+    const results = await runWithConcurrency(movableTargets, async (video) => (
       sendMessage({
         type: 'MOVE_TO_PLAYLIST',
         videoId: video.id,
@@ -3700,11 +4143,10 @@ async function moveToPlaylist(playlistId) {
     ));
     const errors = results.filter(r => r && !r.success && r.error);
     if (errors.length > 0) {
-      showToast(`Move had ${errors.length} error(s)`, 'warning');
+      resolveLoadingToast(toast, `Move had ${errors.length} error(s)`, 'warning');
     } else {
-      showToast(`Moved ${targets.length} to ${playlist?.title}`, 'success');
+      resolveLoadingToast(toast, `Moved ${movableTargets.length} to ${playlist?.title}`, 'success');
     }
-    setStatus('Ready');
   })();
 }
 
@@ -3714,7 +4156,7 @@ async function addToPlaylist(playlistId) {
   if (targets.length === 0) return;
 
   const playlist = getPlaylistById(playlistId);
-  setStatus(`Adding ${targets.length} video(s) to ${playlist?.title}...`);
+  const toast = showLoadingToast(`Adding ${targets.length} video(s) to ${playlist?.title}...`);
 
   const results = await runWithConcurrency(targets, async (video) => addVideoToPlaylist(video, playlistId));
   const added = results.filter(r => r?.success).length;
@@ -3726,8 +4168,7 @@ async function addToPlaylist(playlistId) {
   updateMode();
 
   renderVideos();
-  showToast(`Added ${added} video(s) to ${playlist?.title}`, added > 0 ? 'success' : 'error');
-  setStatus('Ready');
+  resolveLoadingToast(toast, `Added ${added} video(s) to ${playlist?.title}`, added > 0 ? 'success' : 'error');
 }
 
 // Modal
@@ -4396,10 +4837,7 @@ document.addEventListener('keydown', (e) => {
     } else {
       const video = filteredVideos[focusedIndex];
       if (video) {
-        const url = currentTab === 'watchlater'
-          ? getWatchLaterVideoUrl(video)
-          : `https://www.youtube.com/watch?v=${video.id}`;
-        window.open(url, '_blank');
+        openVideoInYouTube(video);
       }
     }
   } else if (e.key === refreshActionKey || e.key === 'r') {
@@ -4468,10 +4906,7 @@ document.addEventListener('keydown', (e) => {
     } else {
       const video = filteredVideos[focusedIndex];
       if (video) {
-        const url = currentTab === 'watchlater'
-          ? getWatchLaterVideoUrl(video)
-          : `https://www.youtube.com/watch?v=${video.id}`;
-        window.open(url, '_blank');
+        openVideoInYouTube(video);
       }
     }
   } else if (e.key === 'y') {
@@ -4486,9 +4921,10 @@ document.addEventListener('keydown', (e) => {
     } else {
       const video = filteredVideos[focusedIndex];
       if (video) {
-        url = currentTab === 'watchlater'
-          ? getWatchLaterVideoUrl(video)
-          : `https://www.youtube.com/watch?v=${video.id}`;
+        url = getVideoUrlForTab(video);
+        if (!url && isUnavailableVideo(video)) {
+          showToast('Unavailable videos do not have a YouTube URL.', 'info');
+        }
       }
     }
     if (url) {
@@ -4530,7 +4966,7 @@ async function loadData() {
   };
   const loadingLabel = loadingLabels[currentTab] || 'Data';
   loadingText.textContent = `Loading ${loadingLabel}...`;
-  setStatus(`Loading ${loadingLabel}...`);
+  const toast = showLoadingToast(`Loading ${loadingLabel}...`);
 
   try {
     // Load quick move assignments
@@ -4548,6 +4984,7 @@ async function loadData() {
         videos = watchLaterVideos;
         watchLaterCountEl.textContent = watchLaterVideos.length;
         renderVideos();
+        autoCleanUnavailableWatchLaterVideos();
       } else {
         throw new Error(videosResult.error || 'Failed to load videos');
       }
@@ -4557,8 +4994,7 @@ async function loadData() {
         rebuildPlaylistMap();
         renderPlaylists();
       }
-      setStatus('Ready');
-      showToast(`Loaded ${watchLaterVideos.length} videos`, 'success');
+      resolveLoadingToast(toast, `Loaded ${watchLaterVideos.length} videos`, 'success');
     } else if (currentTab === 'playlists') {
       // Load Playlists
       const playlistsResult = await sendMessage({ type: 'GET_PLAYLISTS' });
@@ -4566,7 +5002,9 @@ async function loadData() {
       if (playlistsResult.success) {
         playlists = playlistsResult.data;
         rebuildPlaylistMap();
-        playlistsCountEl.textContent = playlists.length;
+        if (playlistsCountEl) {
+          playlistsCountEl.textContent = playlists.length;
+        }
 
         // If in video view, reload that playlist
         if (playlistBrowserLevel === 'videos' && activePlaylistId) {
@@ -4580,8 +5018,7 @@ async function loadData() {
         } else {
           renderPlaylistBrowser();
         }
-        setStatus('Ready');
-        showToast(`Loaded ${playlists.length} playlists`, 'success');
+        resolveLoadingToast(toast, `Loaded ${playlists.length} playlists`, 'success');
       } else {
         throw new Error(playlistsResult.error || 'Failed to load playlists');
       }
@@ -4594,8 +5031,7 @@ async function loadData() {
         rebuildChannelMap();
         channelsCountEl.textContent = channels.length;
         renderChannels();
-        setStatus('Ready');
-        showToast(`Loaded ${channels.length} channels`, 'success');
+        resolveLoadingToast(toast, `Loaded ${channels.length} channels`, 'success');
       } else {
         throw new Error(channelsResult.error || 'Failed to load channels');
       }
@@ -4610,15 +5046,14 @@ async function loadData() {
         videos = subscriptionVideos;
         subscriptionsCountEl.textContent = subscriptionVideos.length;
         renderVideos();
-        setStatus('Ready');
-        showToast(`Loaded ${subscriptionVideos.length} videos`, 'success');
+        resolveLoadingToast(toast, `Loaded ${subscriptionVideos.length} videos`, 'success');
       } else {
         throw new Error(subsResult.error || 'Failed to load subscriptions');
       }
     }
   } catch (error) {
     errorLog('Load error:', error);
-    setStatus(error.message, 'error');
+    resolveLoadingToast(toast, error.message, 'error');
     showLoadError(error.message);
   } finally {
     loadingEl.style.display = 'none';
@@ -4648,7 +5083,6 @@ async function loadAllData() {
   loadingEl.style.display = 'flex';
   videoList.innerHTML = '';
   loadingText.textContent = 'Loading current view...';
-  setStatus('Loading current view...', 'loading');
 
   const prefetch = async () => {
     const tasks = [];
@@ -4690,7 +5124,9 @@ async function loadAllData() {
         if (result.success) {
           playlists = result.data || [];
           rebuildPlaylistMap();
-          playlistsCountEl.textContent = playlists.length;
+          if (playlistsCountEl) {
+            playlistsCountEl.textContent = playlists.length;
+          }
           renderPlaylists();
         }
       })());
@@ -4733,7 +5169,6 @@ async function loadAllData() {
     prefetch().catch(e => warnLog('Background prefetch failed:', e));
   } catch (error) {
     errorLog('Load error:', error);
-    setStatus(error.message, 'error');
     showLoadError(error.message);
     loadingEl.style.display = 'none';
     return;
@@ -4747,7 +5182,6 @@ tabWatchLater.addEventListener('click', () => switchTab('watchlater'));
 tabSubscriptions.addEventListener('click', () => switchTab('subscriptions'));
 tabChannels.addEventListener('click', () => switchTab('channels'));
 tabPlaylists.addEventListener('click', () => switchTab('playlists'));
-
 tabStrip?.addEventListener('scroll', updateTabOverflowIndicators);
 tabShiftBefore?.addEventListener('click', () => {
   if (!tabStrip) return;
@@ -4841,10 +5275,7 @@ videoList.addEventListener('dblclick', (e) => {
     const index = parseInt(videoItem.getAttribute('data-index') || '0', 10);
     const video = filteredVideos[index];
     if (video) {
-      const url = currentTab === 'watchlater'
-        ? getWatchLaterVideoUrl(video)
-        : `https://www.youtube.com/watch?v=${video.id}`;
-      window.open(url, '_blank');
+      openVideoInYouTube(video);
     }
   }
 });

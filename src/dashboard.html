@@ -96,6 +96,7 @@
     html {
       overflow: hidden;
       height: 100%;
+      width: 100%;
     }
 
     /* Global focus-visible for accessibility */
@@ -111,6 +112,7 @@
       font-size: 13px;
       line-height: 1.5;
       min-height: 100vh;
+      width: 100%;
       overflow: hidden;
     }
 
@@ -119,8 +121,7 @@
       display: grid;
       grid-template-rows: auto 1fr auto;
       height: 100vh;
-      max-width: 1400px;
-      margin: 0 auto;
+      width: 100vw;
       overflow: hidden;
     }
 
@@ -308,7 +309,9 @@
     /* Main content */
     main {
       display: grid;
-      grid-template-columns: 1fr 280px;
+      grid-template-columns: minmax(0, 1fr) clamp(280px, 24vw, 420px);
+      min-height: 0;
+      min-width: 0;
       overflow: hidden;
     }
 
@@ -360,6 +363,21 @@
       outline-offset: -1px;
     }
 
+    .video-item.delete-queued {
+      border-color: var(--border-color);
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.02), transparent);
+    }
+
+    .video-item.delete-pending {
+      border-color: var(--warning);
+      background: linear-gradient(90deg, rgba(255, 193, 7, 0.08), rgba(255, 193, 7, 0.03));
+    }
+
+    .video-item.delete-failed {
+      border-color: var(--accent);
+      background: linear-gradient(90deg, rgba(255, 68, 68, 0.1), rgba(255, 68, 68, 0.03));
+    }
+
     .video-index {
       color: var(--text-muted);
       font-size: 11px;
@@ -408,6 +426,62 @@
       line-height: 1.2;
     }
 
+    .video-delete-state {
+      margin-top: 6px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.35px;
+      color: var(--warning);
+    }
+
+    .video-delete-state.queued {
+      color: var(--text-secondary);
+    }
+
+    .video-delete-state.failed {
+      color: var(--accent);
+    }
+
+    .video-delete-spinner {
+      width: 10px;
+      height: 10px;
+      border: 2px solid transparent;
+      border-top-color: currentColor;
+      border-right-color: currentColor;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex: 0 0 auto;
+    }
+
+    .video-delete-track {
+      margin-top: 5px;
+      width: 100%;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--bg-tertiary);
+      overflow: hidden;
+      position: relative;
+      color: var(--warning);
+    }
+
+    .video-delete-state.queued + .video-delete-track {
+      color: var(--text-muted);
+    }
+
+    .video-delete-bar {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      width: 38%;
+      border-radius: inherit;
+      background: currentColor;
+      animation: deleteProgressSlide 1s ease-in-out infinite;
+    }
+
     .video-meta {
       display: flex;
       gap: 8px;
@@ -430,6 +504,17 @@
       font-weight: bold;
     }
 
+    .unavailable-indicator {
+      font-size: 10px;
+      border: 1px solid rgba(255, 68, 68, 0.45);
+      border-radius: 999px;
+      padding: 1px 6px;
+      color: var(--accent);
+      line-height: 1.2;
+      text-transform: uppercase;
+      letter-spacing: 0.2px;
+    }
+
     /* Thumbnail wrapper for overlays */
     .thumbnail-wrapper {
       position: relative;
@@ -441,6 +526,18 @@
     .thumbnail-wrapper .video-thumbnail {
       width: 100%;
       height: 100%;
+    }
+
+    .video-thumbnail.video-thumbnail-fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px;
+      color: var(--text-muted);
+      font-size: 11px;
+      line-height: 1.25;
+      text-align: center;
+      border: 1px dashed var(--border-color);
     }
 
     /* Progress bar (watched indicator) */
@@ -457,6 +554,14 @@
     .video-item.fully-watched .video-title,
     .video-item.fully-watched .video-channel {
       opacity: 0.6;
+    }
+
+    .video-item.unavailable .video-title {
+      color: var(--accent);
+    }
+
+    .video-item.unavailable .video-channel {
+      color: var(--text-muted);
     }
 
     /* Hide watched indicator in stats bar */
@@ -591,9 +696,8 @@
       display: flex;
       flex-direction: column;
       gap: 24px;
-      position: sticky;
-      top: 0;
-      height: calc(100vh - 120px);
+      min-height: 0;
+      height: 100%;
     }
 
     .sidebar-section h3 {
@@ -726,33 +830,7 @@
     }
 
     .status-message {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .status-message.error {
-      color: var(--accent);
-    }
-
-    .status-message.success {
-      color: var(--success);
-    }
-
-    .status-message.loading {
-      color: var(--text-primary);
-    }
-    
-    .status-message.loading::before {
-      content: '';
-      display: inline-block;
-      width: 10px;
-      height: 10px;
-      border: 2px solid var(--text-muted);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-      margin-right: 8px;
+      display: none;
     }
 
     .selection-info {
@@ -893,6 +971,11 @@
       to { transform: rotate(360deg); }
     }
 
+    @keyframes deleteProgressSlide {
+      from { transform: translateX(-110%); }
+      to { transform: translateX(320%); }
+    }
+
     /* Search */
     .search-container {
       padding: 0 8px 8px;
@@ -979,22 +1062,66 @@
       z-index: 500;
     }
 
+    @property --toast-border-angle {
+      syntax: '<angle>';
+      inherits: false;
+      initial-value: -90deg;
+    }
+
     .toast {
       background: var(--bg-tertiary);
-      border: 1px solid var(--border-color);
+      border: 1px solid transparent;
       padding: 10px 16px;
       border-radius: 4px;
       font-size: 12px;
       animation: slideIn 0.2s ease-out;
+      position: relative;
+      white-space: nowrap;
+      --toast-progress-color: var(--border-color);
+      --toast-border-angle: -90deg;
+      box-shadow: inset 0 0 0 1px var(--border-color);
+    }
+
+    .toast::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      padding: 1px;
+      border-radius: inherit;
+      background: linear-gradient(var(--toast-progress-color), var(--toast-progress-color));
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
     }
 
     .toast.success {
-      border-color: var(--success);
+      --toast-progress-color: var(--success);
       color: var(--success);
     }
 
+    .toast.warning {
+      --toast-progress-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .toast.loading {
+      --toast-progress-color: var(--accent);
+      color: var(--text-primary);
+    }
+
+    .toast.loading::after {
+      background: conic-gradient(
+        from var(--toast-border-angle),
+        transparent 0deg 245deg,
+        var(--toast-progress-color) 245deg 325deg,
+        transparent 325deg 360deg
+      );
+      animation: toastBorderOrbit 0.8s linear infinite;
+    }
+
     .toast.error {
-      border-color: var(--accent);
+      --toast-progress-color: var(--accent);
       color: var(--accent);
     }
 
@@ -1006,6 +1133,12 @@
       to {
         opacity: 1;
         transform: translateX(0);
+      }
+    }
+
+    @keyframes toastBorderOrbit {
+      to {
+        --toast-border-angle: 270deg;
       }
     }
 
@@ -1949,7 +2082,7 @@
         <button class="tab-shift tab-shift-before" id="tab-shift-before" type="button" aria-label="Scroll tabs left">&#x2039;</button>
         <nav class="nav-tabs" id="tab-strip">
           <button class="nav-tab" data-tab="playlists" id="tab-playlists">
-            Playlists<span class="tab-count" id="playlists-count">-</span>
+            Playlists
           </button>
           <button class="nav-tab active" data-tab="watchlater" id="tab-watchlater">
             Watch Later<span class="tab-count" id="watchlater-count">-</span>
@@ -2110,11 +2243,11 @@
     </div>
   </div>
 
-  <!-- Purge Watched Modal -->
+  <!-- Watch Later Bulk Delete Modal -->
   <div class="modal-overlay" id="purge-modal" style="display: none;">
     <div class="modal purge-modal">
       <div class="modal-header">
-        <h3>Remove Watched Videos</h3>
+        <h3 id="purge-title">Remove Videos</h3>
         <span class="modal-subtitle" id="purge-count"></span>
       </div>
       <div class="purge-list" id="purge-list"></div>
