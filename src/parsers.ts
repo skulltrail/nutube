@@ -9,6 +9,56 @@ export interface Video {
   setVideoId?: string;
   watched?: boolean;
   progressPercent?: number;
+  unavailable?: boolean;
+}
+
+function readText(textRenderer: any): string {
+  if (!textRenderer) return '';
+  if (typeof textRenderer.simpleText === 'string') return textRenderer.simpleText;
+  if (Array.isArray(textRenderer.runs)) {
+    return textRenderer.runs
+      .map((run: any) => run?.text || '')
+      .join('')
+      .trim();
+  }
+  return '';
+}
+
+function extractDurationAndProgressFromRenderer(renderer: any): { duration: string; progressPercent: number; watched: boolean } {
+  const result = { duration: '', progressPercent: 0, watched: false };
+
+  const directDuration = renderer.lengthText?.simpleText || renderer.lengthText?.runs?.[0]?.text;
+  if (directDuration && /^\d+:\d+/.test(directDuration)) {
+    result.duration = directDuration;
+  }
+
+  const overlays = renderer.thumbnailOverlays || [];
+  for (const overlay of overlays) {
+    const overlayDuration = overlay.thumbnailOverlayTimeStatusRenderer?.text?.simpleText ||
+      overlay.thumbnailOverlayTimeStatusRenderer?.text?.runs?.[0]?.text;
+    if (overlayDuration && /^\d+:\d+/.test(overlayDuration)) {
+      result.duration = overlayDuration;
+    }
+
+    const resume = overlay.thumbnailOverlayResumePlaybackRenderer;
+    if (resume) {
+      const parsed = Number(resume.percentDurationWatched);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        const clamped = Math.max(0, Math.min(100, Math.round(parsed)));
+        result.progressPercent = Math.max(result.progressPercent, clamped);
+      } else {
+        // If YouTube omits the exact percent, assume fully watched.
+        result.progressPercent = Math.max(result.progressPercent, 100);
+      }
+    }
+
+    if (overlay.thumbnailOverlayWatchedStatusRenderer) {
+      result.progressPercent = Math.max(result.progressPercent, 100);
+    }
+  }
+
+  result.watched = result.progressPercent >= 90;
+  return result;
 }
 
 export function parseVideoItem(item: any): Video | null {
@@ -17,17 +67,28 @@ export function parseVideoItem(item: any): Video | null {
   if (!renderer) return null;
 
   const videoId = renderer.videoId;
-  if (!videoId) return null;
+  const setVideoId = renderer.setVideoId;
+  const isUnavailable = !videoId && !!setVideoId;
+  if (!videoId && !setVideoId) return null;
+  const { duration, progressPercent, watched } = extractDurationAndProgressFromRenderer(renderer);
+  const title = readText(renderer.title) || (isUnavailable ? 'Unavailable video' : 'Unknown');
+  const channel = readText(renderer.shortBylineText) || (isUnavailable ? 'Unavailable' : 'Unknown');
+  const channelId = renderer.shortBylineText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId || '';
+  const thumbnail = renderer.thumbnail?.thumbnails?.[0]?.url ||
+    (videoId ? `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg` : '');
 
   return {
-    id: videoId,
-    title: renderer.title?.runs?.[0]?.text || renderer.title?.simpleText || 'Unknown',
-    channel: renderer.shortBylineText?.runs?.[0]?.text || 'Unknown',
-    channelId: renderer.shortBylineText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId || '',
-    thumbnail: renderer.thumbnail?.thumbnails?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
-    duration: renderer.lengthText?.simpleText || renderer.lengthText?.runs?.[0]?.text || '',
-    publishedAt: renderer.publishedTimeText?.simpleText || '',
-    setVideoId: renderer.setVideoId,
+    id: videoId || `unavailable:${setVideoId}`,
+    title,
+    channel,
+    channelId,
+    thumbnail,
+    duration,
+    publishedAt: readText(renderer.publishedTimeText),
+    setVideoId,
+    watched,
+    progressPercent,
+    unavailable: isUnavailable,
   };
 }
 
@@ -43,6 +104,7 @@ export function parseSubscriptionVideoItem(item: any): Video | null {
 
   const videoId = videoRenderer.videoId;
   if (!videoId) return null;
+  const { duration, progressPercent, watched } = extractDurationAndProgressFromRenderer(videoRenderer);
 
   return {
     id: videoId,
@@ -54,8 +116,10 @@ export function parseSubscriptionVideoItem(item: any): Video | null {
                videoRenderer.shortBylineText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId ||
                videoRenderer.longBylineText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId || '',
     thumbnail: videoRenderer.thumbnail?.thumbnails?.[0]?.url || `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
-    duration: videoRenderer.lengthText?.simpleText || videoRenderer.lengthText?.runs?.[0]?.text || '',
+    duration,
     publishedAt: videoRenderer.publishedTimeText?.simpleText || videoRenderer.publishedTimeText?.runs?.[0]?.text || '',
+    watched,
+    progressPercent,
   };
 }
 

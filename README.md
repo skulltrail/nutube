@@ -51,23 +51,23 @@ npm run build
 
 ## ✨ Features
 
-- 🧹 **Tame Your Watch Later** — YouTube's Watch Later is a graveyard. Removing videos requires hover → menu → click → confirm for _each one_. NuTube lets you select 50 videos and delete them in one keystroke. Or move them all to a playlist instantly.
+- 🧹 **Tame Your Watch Later** - YouTube's Watch Later is a graveyard. Removing videos requires hover → menu → click → confirm for _each one_. NuTube lets you select 50 videos and delete them in one keystroke. Or move them all to a playlist instantly.
 
-- 🔍 **Navigate with Intent** — YouTube's Watch Later has no search. No filtering. Just endless scrolling. NuTube gives you instant fuzzy search, jump-to-top/bottom, and keyboard navigation. Find that tutorial from 6 months ago in seconds.
+- 🔍 **Navigate with Intent** - YouTube's Watch Later has no search. No filtering. Just endless scrolling. NuTube gives you instant fuzzy search, jump-to-top/bottom, and keyboard navigation. Find that tutorial from 6 months ago in seconds.
 
-- 📥 **Queue from Subscriptions** — YouTube's subscription feed is view-only. Want to save something? Click the video, wait for load, click menu, click "Save", select playlist, close modal. NuTube lets you queue videos to Watch Later or any playlist without ever leaving the page.
+- 📥 **Queue from Subscriptions** - YouTube's subscription feed is view-only. Want to save something? Click the video, wait for load, click menu, click "Save", select playlist, close modal. NuTube lets you queue videos to Watch Later or any playlist without ever leaving the page.
 
-- ✂️ **Audit Your Subscriptions** — Subscribed to 500 channels but only watch 50? YouTube makes unsubscribing a chore. NuTube shows all your channels in one list with activity indicators. See who's gone dormant. Batch-unsubscribe the noise.
+- ✂️ **Audit Your Subscriptions** - Subscribed to 500 channels but only watch 50? YouTube makes unsubscribing a chore. NuTube shows all your channels in one list with activity indicators. See who's gone dormant. Batch-unsubscribe the noise.
 
-- 🧠 **Smart Queue Ranking + Fuzzy Search** — Rank what to watch next by recency/progress/duration fit with `I`, and find items with typo-tolerant fuzzy search across title/channel/tags/notes.
+- 🧠 **Smart Queue Ranking + Fuzzy Search** - Rank what to watch next by recency/progress/duration fit with `I`, and find items with typo-tolerant fuzzy search across title/channel/tags/notes.
 
-- 🧩 **Companion Everywhere** — Open NuTube from popup, side panel, global keyboard command, or directly inside YouTube via floating launcher and `Alt+Shift+N`.
+- 🧩 **Companion Everywhere** - Open NuTube from popup, side panel, global keyboard command, or directly inside YouTube via floating launcher and `Alt+Shift+N`.
 
-- 💾 **Portable Backups** — Export/import settings, assignments, watched overrides, hidden videos, and annotations with keyboard shortcuts.
+- 💾 **Portable Backups** - Export/import settings, assignments, watched overrides, hidden videos, and annotations with keyboard shortcuts.
 
-- 🔒 **Privacy-First** — YouTube only, no external services. Zero tracking, no analytics or telemetry. Everything runs locally in your browser. Open source — audit it yourself.
+- 🔒 **Privacy-First** - YouTube only, no external services. Zero tracking, no analytics or telemetry. Everything runs locally in your browser. Open source - audit it yourself.
 
-- ⌨️ **Built for Power Users** — Vim keybindings, visual selection mode, undo support, dark terminal aesthetic.
+- ⌨️ **Built for Power Users** - Vim keybindings, visual selection mode, undo support, dark terminal aesthetic.
 
 ---
 
@@ -133,11 +133,11 @@ m       → Move to playlist
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-NuTube speaks directly to YouTube's **InnerTube API** — the same protocol powering youtube.com.
+NuTube speaks directly to YouTube's **InnerTube API** - the same protocol powering youtube.com.
 
-- **No API keys** — Uses your existing session
-- **No quotas** — Direct access like the real client
-- **Real-time** — Changes sync instantly
+- **No API keys** - Uses your existing session
+- **No quotas** - Direct access like the real client
+- **Real-time** - Changes sync instantly
 
 ---
 
