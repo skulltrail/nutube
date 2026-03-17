@@ -39,6 +39,42 @@ export const mockPlaylistVideoRendererMinimal = {
   },
 };
 
+export const mockPlaylistVideoRendererWithProgress = {
+  playlistVideoRenderer: {
+    videoId: 'wlprogress1',
+    title: {
+      runs: [{ text: 'Watch Later Progress Video' }],
+    },
+    shortBylineText: {
+      runs: [{ text: 'Progress Channel' }],
+    },
+    thumbnailOverlays: [
+      {
+        thumbnailOverlayTimeStatusRenderer: {
+          text: { simpleText: '12:34' },
+        },
+      },
+      {
+        thumbnailOverlayResumePlaybackRenderer: {
+          percentDurationWatched: 96,
+        },
+      },
+    ],
+  },
+};
+
+export const mockUnavailablePlaylistVideoRenderer = {
+  playlistVideoRenderer: {
+    title: {
+      runs: [{ text: 'Deleted video' }],
+    },
+    shortBylineText: {
+      runs: [{ text: 'Unavailable' }],
+    },
+    setVideoId: 'WLUNAVAILABLE123',
+  },
+};
+
 export const mockVideoRenderer = {
   videoRenderer: {
     videoId: 'jNQXAC9IVRw',
@@ -84,6 +120,33 @@ export const mockRichItemRenderer = {
           simpleText: '10:00',
         },
       },
+    },
+  },
+};
+
+export const mockVideoRendererWithProgress = {
+  videoRenderer: {
+    videoId: 'subprogress1',
+    title: {
+      runs: [{ text: 'Subscription Progress Video' }],
+    },
+    ownerText: {
+      runs: [{ text: 'Progress Owner' }],
+    },
+    thumbnailOverlays: [
+      {
+        thumbnailOverlayTimeStatusRenderer: {
+          text: { simpleText: '8:00' },
+        },
+      },
+      {
+        thumbnailOverlayResumePlaybackRenderer: {
+          percentDurationWatched: 65,
+        },
+      },
+    ],
+    publishedTimeText: {
+      simpleText: '1 day ago',
     },
   },
 };
@@ -237,6 +300,17 @@ export const mockPlaylistLockupViewModel = {
   lockupViewModel: {
     contentId: 'PLlockup456',
     contentType: 'LOCKUP_CONTENT_TYPE_PLAYLIST',
+    contentImage: {
+      collectionThumbnailViewModel: {
+        primaryThumbnail: {
+          thumbnailViewModel: {
+            image: {
+              sources: [{ url: 'https://i.ytimg.com/playlist/lockup-cover.jpg' }],
+            },
+          },
+        },
+      },
+    },
     metadata: {
       lockupMetadataViewModel: {
         title: {

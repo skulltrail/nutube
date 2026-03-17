@@ -5,7 +5,10 @@ import { describe, it, expect } from 'vitest';
 import {
   mockPlaylistVideoRenderer,
   mockPlaylistVideoRendererMinimal,
+  mockPlaylistVideoRendererWithProgress,
+  mockUnavailablePlaylistVideoRenderer,
   mockVideoRenderer,
+  mockVideoRendererWithProgress,
   mockRichItemRenderer,
   mockLockupViewModel,
   mockLockupViewModelWithProgress,
@@ -67,6 +70,26 @@ describe('parseVideoItem', () => {
     const video = parseVideoItem({ playlistVideoRenderer: { title: 'No ID' } });
     expect(video).toBeNull();
   });
+
+  it('should keep unavailable playlist entries that still have a setVideoId', () => {
+    const video = parseVideoItem(mockUnavailablePlaylistVideoRenderer);
+
+    expect(video).not.toBeNull();
+    expect(video?.id).toBe('unavailable:WLUNAVAILABLE123');
+    expect(video?.title).toBe('Deleted video');
+    expect(video?.channel).toBe('Unavailable');
+    expect(video?.setVideoId).toBe('WLUNAVAILABLE123');
+    expect(video?.unavailable).toBe(true);
+  });
+
+  it('should parse watched progress from thumbnail overlays', () => {
+    const video = parseVideoItem(mockPlaylistVideoRendererWithProgress);
+
+    expect(video).not.toBeNull();
+    expect(video?.duration).toBe('12:34');
+    expect(video?.progressPercent).toBe(96);
+    expect(video?.watched).toBe(true);
+  });
 });
 
 describe('parseSubscriptionVideoItem', () => {
@@ -93,6 +116,15 @@ describe('parseSubscriptionVideoItem', () => {
   it('should return null for non-video items', () => {
     const video = parseSubscriptionVideoItem({});
     expect(video).toBeNull();
+  });
+
+  it('should parse subscription watch progress from thumbnail overlays', () => {
+    const video = parseSubscriptionVideoItem(mockVideoRendererWithProgress);
+
+    expect(video).not.toBeNull();
+    expect(video?.duration).toBe('8:00');
+    expect(video?.progressPercent).toBe(65);
+    expect(video?.watched).toBe(false);
   });
 });
 
@@ -297,10 +329,16 @@ describe('playlist parsing', () => {
       if (videoCount > 0) break;
     }
 
+    const thumbnail =
+      lockup.contentImage?.collectionThumbnailViewModel?.primaryThumbnail?.thumbnailViewModel?.image?.sources?.[0]?.url ||
+      lockup.contentImage?.collectionThumbnailViewModel?.stackedThumbnails?.[0]?.thumbnailViewModel?.image?.sources?.[0]?.url ||
+      '';
+
     return {
       id: contentId,
       title: title,
       videoCount,
+      thumbnail,
     };
   }
 
@@ -311,6 +349,7 @@ describe('playlist parsing', () => {
     expect(playlist?.id).toBe('PLlockup456');
     expect(playlist?.title).toBe('Lockup Playlist');
     expect(playlist?.videoCount).toBe(42);
+    expect(playlist?.thumbnail).toBe('https://i.ytimg.com/playlist/lockup-cover.jpg');
   });
 
   it('should handle lockupViewModel without video count', () => {
